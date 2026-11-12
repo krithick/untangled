@@ -2,8 +2,8 @@
 
 Untangle turns Mermaid diagrams into something you can move, edit, walk through and share, and gives you clean Mermaid code back.
 
-- **Edit by dragging:** flowcharts, ER diagrams and sequence diagrams. Move boxes, bend lines, reorder messages, edit text in place.
-- **View and export everything else:** class, state, Gantt, pie, mindmap, timeline, C4 and every other Mermaid type, drawn by the official Mermaid library.
+- **Edit by dragging:** flowcharts (with subgraphs), sequence diagrams (with loop/alt/opt/par blocks and activations), class diagrams (with namespaces and every UML relationship), state diagrams (with composite states, choice, fork and join) and ER diagrams. Move boxes, bend lines, reorder messages, edit text in place.
+- **Edit every other type:** Gantt, pie, timeline, journey, quadrant and Sankey charts get table editors; mindmaps, Git graphs, C4, kanban, block, requirement and the rest get a line-by-line outline editor. Double-click any text on the drawing to change it, and the code tab redraws as you type.
 - **Walkthrough:** step through a flowchart one decision at a time, or play a sequence diagram message by message.
 - **Accounts and a dashboard:** sign up, keep all your diagrams, search, rename, duplicate, delete, upload `.mmd` files (or drop them on the page).
 - **Auto-save and version history:** changes save as you work; a version is kept every few minutes (last 50), and any version can be restored.
@@ -69,5 +69,6 @@ Security notes: passwords are hashed with scrypt; sessions are random tokens sto
 - Password reset by email (needs an email provider)
 - Real-time collaboration and comments
 - Teams, billing and plans
-- Editing `loop`/`alt` blocks in sequence diagrams, subgraphs in flowcharts, and class diagrams
+- Sequence diagram `box` groups and `create`/`destroy` (these open in the outline editor instead)
+- State diagram concurrency regions (`--`), which also open in the outline editor
 - Embeds for Notion, Confluence and GitHub READMEs

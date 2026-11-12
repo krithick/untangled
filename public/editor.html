@@ -178,6 +178,15 @@ a.btn{text-decoration:none;display:inline-flex;align-items:center}
 .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:24px}
 .empty h2{font-family:var(--display);margin:0}.empty p{margin:0;color:var(--muted);max-width:46ch}
 body.readonly .stage-note{display:none}
+.vtable{display:grid;grid-template-columns:repeat(var(--cols),minmax(0,1fr)) auto;gap:4px;align-items:center}
+.vtable .vh{font-size:11.5px;color:var(--muted);font-weight:600}
+.vtable .in{padding:5px 7px;font-size:13px;min-width:0}
+.outline summary{cursor:pointer;font-weight:600;font-size:13px}
+.olist{display:flex;flex-direction:column;gap:3px;margin-top:6px}
+.orow{display:flex;align-items:center;gap:2px;padding-left:calc(var(--ind) * 5px)}
+.orow .in{flex:1;min-width:0;padding:4px 6px;font-size:12px;font-family:var(--mono)}
+.obtns{display:flex;opacity:.35}.orow:hover .obtns,.orow:focus-within .obtns{opacity:1}
+.obtns .x{font-size:12px;padding:3px 4px}
 </style>
 </head>
 <body>
