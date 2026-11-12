@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My diagrams · Untangle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+<div class="container">
+  <nav class="nav">
+    <a class="logo" href="/app"><span class="logo-mark" aria-hidden="true"></span>Untangle</a>
+    <div class="nav-links">
+      <div class="user-menu">
+        <button class="btn ghost" id="user-btn" aria-haspopup="true" aria-expanded="false"><span id="user-name">Account</span> ▾</button>
+        <div class="menu" id="user-menu" hidden role="menu">
+          <button role="menuitem" id="go-account">Account settings</button>
+          <button role="menuitem" id="logout">Log out</button>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <div class="dash-head">
+    <div><p class="eyebrow" id="count">Your diagrams</p><h1>My diagrams</h1></div>
+    <div class="dash-tools">
+      <input class="in" id="search" type="search" placeholder="Search by title" aria-label="Search diagrams">
+      <button class="btn" id="upload-btn">Upload .mmd</button>
+      <button class="btn primary" id="new-btn">New diagram</button>
+      <input type="file" id="file" accept=".mmd,.mermaid,.md,.txt,text/plain" multiple hidden>
+    </div>
+  </div>
+  <p class="msg" id="dash-msg" role="status"></p>
+  <div class="grid" id="grid" aria-live="polite"></div>
+  <div class="empty-state" id="empty" hidden>
+    <h2>Start your first diagram</h2>
+    <p>Upload a .mmd file, paste Mermaid code or pick a template. You can also drop .mmd files anywhere on this page.</p>
+    <div class="row"><button class="btn primary" id="empty-new">New diagram</button><button class="btn" id="empty-upload">Upload .mmd</button></div>
+  </div>
+</div>
+
+<div class="modal" id="new-modal" hidden role="dialog" aria-modal="true" aria-labelledby="new-h">
+  <div class="modal-card">
+    <h2 id="new-h">New diagram</h2>
+    <p class="eyebrow">Start from a template</p>
+    <div class="tpl-grid" id="tpls"></div>
+    <p class="eyebrow">Or paste Mermaid code</p>
+    <textarea class="in" id="paste" rows="7" placeholder="flowchart TD&#10;    a[Start] --> b[Next step]" spellcheck="false" aria-label="Mermaid code"></textarea>
+    <p class="msg" id="new-msg" role="alert"></p>
+    <div class="row"><button class="btn primary" id="paste-go">Create from code</button><button class="btn" id="new-close">Cancel</button></div>
+  </div>
+</div>
+
+<div class="modal" id="rename-modal" hidden role="dialog" aria-modal="true" aria-labelledby="rename-h">
+  <form class="modal-card" style="width:min(460px,100%)" id="rename-form">
+    <h2 id="rename-h">Rename diagram</h2>
+    <div class="field"><label for="rename-in">Title</label><input class="in" id="rename-in" maxlength="120" required></div>
+    <div class="row"><button class="btn primary" type="submit">Save</button><button class="btn" type="button" id="rename-close">Cancel</button></div>
+  </form>
+</div>
+
+<div class="modal" id="delete-modal" hidden role="dialog" aria-modal="true" aria-labelledby="delete-h">
+  <div class="modal-card" style="width:min(460px,100%)">
+    <h2 id="delete-h">Delete this diagram?</h2>
+    <p id="delete-text"></p>
+    <div class="row"><button class="btn primary" id="delete-go" style="background:var(--danger);border-color:var(--danger)">Delete</button><button class="btn" id="delete-close">Cancel</button></div>
+  </div>
+</div>
+<script src="/js/templates.js"></script>
+<script type="module" src="/js/dashboard.js"></script>
+</body>
+</html>

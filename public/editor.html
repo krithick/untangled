@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Untangle editor</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout: a drafting table. Toolbar on top, a dotted canvas you work on, an inspector rail on the right (stacks below on phones), then the plain-Mermaid comparison. */
+:root{
+  --bg:#F1F3F7; --panel:#FFFFFF; --ink:#18202E; --muted:#5A6476; --line:#D4D9E2;
+  --canvas:#F8F9FB; --grid:#C3CAD6; --head:#E9EDF4; --edge:#5F6980; --node-line:#9AA3B5;
+  --accent:#2D55E0; --accent-soft:#E2E8FC; --on-accent:#FFFFFF;
+  --pk:#A86A12; --fk:#0E7F74; --uk:#7C4FC4; --danger:#B4233C; --ok:#0E7F74;
+  --display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
+  --ui:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0E1219; --panel:#151B25; --ink:#E5E9F1; --muted:#98A2B4; --line:#2A3241;
+  --canvas:#111720; --grid:#2B3444; --head:#1C2431; --edge:#8D97AB; --node-line:#566074;
+  --accent:#7D9BFF; --accent-soft:#1F2846; --on-accent:#0B1020;
+  --pk:#E5AF4A; --fk:#4CC6B6; --uk:#B793F2; --danger:#F07087; --ok:#4CC6B6; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0E1219; --panel:#151B25; --ink:#E5E9F1; --muted:#98A2B4; --line:#2A3241;
+  --canvas:#111720; --grid:#2B3444; --head:#1C2431; --edge:#8D97AB; --node-line:#566074;
+  --accent:#7D9BFF; --accent-soft:#1F2846; --on-accent:#0B1020;
+  --pk:#E5AF4A; --fk:#4CC6B6; --uk:#B793F2; --danger:#F07087; --ok:#4CC6B6; color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font-family:var(--ui);font-size:14px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px 40px}
+.page{max-width:1400px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code{font-family:var(--mono);font-size:.92em}
+
+header.top{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.brand{display:flex;flex-direction:column;gap:2px;min-width:0}
+.brand h1{font-family:var(--display);font-weight:800;font-size:30px;letter-spacing:-.01em;margin:0;line-height:1}
+.brand p{margin:0;color:var(--muted)}
+.tag{font-family:var(--mono);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);background:var(--accent-soft);padding:3px 8px;border-radius:5px;align-self:flex-start}
+.doc{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.doc label{font-size:12px;color:var(--muted)}
+.kind{font-family:var(--mono);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;border:1px solid var(--line);border-radius:5px;padding:3px 8px;color:var(--muted);background:var(--panel)}
+
+.toolbar{position:relative;display:flex;flex-wrap:wrap;gap:4px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px}
+.tb{display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;background:none;border-radius:7px;padding:6px 9px;cursor:pointer;font-weight:500;white-space:nowrap}
+.tb:hover{background:var(--head)}
+.tb[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.tb:disabled{opacity:.4;cursor:default;background:none}
+.tb svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.sep{width:1px;height:22px;background:var(--line);margin:0 2px}
+.zoomval{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:44px;text-align:center;font-variant-numeric:tabular-nums}
+.hint{margin-left:auto;font-size:13px;color:var(--muted);padding:0 6px}
+.hint.on{color:var(--accent);font-weight:600}
+.menu{position:absolute;z-index:20;top:calc(100% + 6px);background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.18);padding:6px;display:flex;flex-direction:column;min-width:230px}
+.menu button{text-align:left;background:none;border:0;border-radius:7px;padding:8px 10px;cursor:pointer;display:flex;flex-direction:column}
+.menu button:hover,.menu button:focus-visible{background:var(--head)}
+.menu small{color:var(--muted);font-size:12px}
+
+.work{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px}
+@media (max-width:900px){.work{grid-template-columns:minmax(0,1fr)}}
+.stage{position:relative;height:clamp(460px,72vh,780px);background:var(--canvas);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+@media (max-width:900px){.stage{height:480px}}
+#svg{width:100%;height:100%;display:block;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+#svg.panning{cursor:grabbing}
+#svg.connecting{cursor:crosshair}
+.gridDot{fill:var(--grid)}
+#inline{position:absolute;z-index:5;font-size:13px;padding:5px 8px;border-radius:6px;border:2px solid var(--accent);background:var(--panel);color:var(--ink);box-shadow:0 6px 18px rgba(0,0,0,.18)}
+.stage-note{position:absolute;left:10px;bottom:10px;font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px;pointer-events:none;max-width:calc(100% - 20px)}
+.toast{position:absolute;right:10px;top:10px;z-index:6;font-size:13px;background:var(--ink);color:var(--bg);border-radius:8px;padding:6px 12px;max-width:calc(100% - 20px)}
+
+aside.side{background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;min-width:0;max-height:clamp(460px,72vh,780px)}
+@media (max-width:900px){aside.side{max-height:none}}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;background:none;border:0;padding:10px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.pane{padding:14px;overflow:auto;display:flex;flex-direction:column;gap:12px;min-height:0}
+.pane h2{font-family:var(--display);font-size:18px;font-weight:700;margin:0;text-wrap:balance}
+.eyebrow{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:12px;color:var(--muted);font-weight:500}
+.in{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--canvas)}
+.in:focus{outline:none;border-color:var(--accent)}
+textarea.in{resize:vertical;min-height:60px;line-height:1.45}
+.attr-row{display:grid;grid-template-columns:76px minmax(0,1fr) auto auto;gap:6px;align-items:center}
+.attr-row .in{padding:5px 7px;font-size:13px}
+.attr-row .in.mono{font-family:var(--mono);font-size:12px}
+.keys{display:flex;gap:2px}
+.kbtn{font-family:var(--mono);font-size:10px;font-weight:600;border:1px solid var(--line);background:none;border-radius:4px;padding:3px 4px;cursor:pointer;color:var(--muted)}
+.kbtn[aria-pressed="true"].PK{background:var(--pk);border-color:var(--pk);color:var(--panel)}
+.kbtn[aria-pressed="true"].FK{background:var(--fk);border-color:var(--fk);color:var(--panel)}
+.kbtn[aria-pressed="true"].UK{background:var(--uk);border-color:var(--uk);color:var(--panel)}
+.x{border:0;background:none;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;padding:4px}
+.x:hover{color:var(--danger)}
+.btn{border:1px solid var(--line);background:var(--panel);border-radius:8px;padding:7px 12px;cursor:pointer;font-weight:500}
+.btn:hover{border-color:var(--accent)}
+.btn:disabled{opacity:.45;cursor:default;border-color:var(--line)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.danger{color:var(--danger)}
+.btn.danger:hover{border-color:var(--danger)}
+.btns{display:flex;flex-wrap:wrap;gap:6px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat{background:var(--canvas);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.stat b{display:block;font-family:var(--display);font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;color:var(--muted)}
+.tips{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px;color:var(--muted)}
+.tips b{color:var(--ink);font-weight:600}
+.card-sm{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px;background:var(--canvas);border:1px solid var(--line);border-radius:8px;padding:8px 10px;flex-wrap:wrap}
+.check{display:flex;align-items:center;gap:8px;font-size:13px}
+.note-box{background:var(--accent-soft);border-radius:8px;padding:10px 12px;font-size:13.5px;white-space:pre-wrap}
+.walk-now{font-family:var(--display);font-size:22px;font-weight:700;line-height:1.15;margin:0;text-wrap:balance}
+.choices{display:flex;flex-direction:column;gap:6px}
+.choice{display:flex;align-items:center;gap:10px;text-align:left;border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:9px 12px;cursor:pointer}
+.choice:hover{border-color:var(--accent);background:var(--accent-soft)}
+.choice kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:4px;padding:1px 5px;color:var(--muted)}
+.choice span{display:flex;flex-direction:column}
+.choice small{color:var(--muted);font-size:12px}
+.trail{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:12px;color:var(--muted)}
+.trail span{background:var(--canvas);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+#code{width:100%;min-height:300px;flex:1;font-family:var(--mono);font-size:12px;line-height:1.5;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--canvas);resize:vertical;white-space:pre;overflow:auto}
+.msg{font-size:13px;min-height:1.2em;margin:0}
+.msg.ok{color:var(--ok)} .msg.err{color:var(--danger)}
+
+.compare{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.compare h2{font-family:var(--display);font-size:20px;margin:0}
+.compare p{margin:0;color:var(--muted);max-width:70ch}
+.mm-wrap{overflow-x:auto;background:var(--canvas);border:1px solid var(--line);border-radius:8px;padding:10px}
+.cmp-tabs{display:flex;gap:6px;flex-wrap:wrap}
+
+.modal{position:fixed;inset:0;z-index:50;background:rgba(10,14,20,.55);display:flex;align-items:center;justify-content:center;padding:max(16px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) max(16px,env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.modal-card{background:var(--panel);border-radius:12px;padding:16px;max-width:min(900px,100%);max-height:100%;overflow:auto;display:flex;flex-direction:column;gap:10px}
+.modal-card h3{margin:0;font-family:var(--display)}
+.modal-card img{max-width:100%;border:1px solid var(--line);border-radius:8px;background:var(--canvas)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{border:0;background:none;padding:6px 11px;cursor:pointer;font-weight:500;font-size:13px;color:var(--muted)}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button:disabled{opacity:.4;cursor:default}
+.xrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.xrow>span{width:84px;font-size:13px;color:var(--muted)}
+.xprev{border:1px solid var(--line);border-radius:8px;padding:10px;display:flex;justify-content:center;max-height:46vh;overflow:auto;
+  background-color:var(--canvas);background-image:linear-gradient(45deg,var(--line) 25%,transparent 25%),linear-gradient(-45deg,var(--line) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--line) 75%),linear-gradient(-45deg,transparent 75%,var(--line) 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0}
+.xprev img{max-width:100%;max-height:42vh;object-fit:contain;border:0;background:none}
+.modal-card{width:min(760px,100%)}
+#mview svg{overflow:visible}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+
+/* ---- app shell ---- */
+.appbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.logo{display:inline-flex;align-items:center;gap:8px;font-family:var(--display);font-weight:800;font-size:20px;color:var(--ink);text-decoration:none;letter-spacing:-.01em}
+.logo-mark{width:22px;height:22px;border-radius:6px;background:var(--accent);position:relative;flex:none}
+.logo-mark::before,.logo-mark::after{content:"";position:absolute;background:var(--on-accent);border-radius:2px}
+.logo-mark::before{left:5px;top:5px;width:6px;height:6px}.logo-mark::after{right:5px;bottom:5px;width:6px;height:6px}
+.doc-meta{display:flex;align-items:center;gap:10px;flex:1;min-width:220px;flex-wrap:wrap}
+.title-in{font-family:var(--display);font-weight:700;font-size:20px;border:1px solid transparent;background:none;border-radius:7px;padding:3px 8px;min-width:0;width:min(420px,100%)}
+.title-in:hover:not([readonly]){border-color:var(--line)}
+.title-in:focus{outline:none;border-color:var(--accent);background:var(--panel)}
+.save-status{font-size:12.5px;color:var(--muted)}
+.save-status.ok{color:var(--ok)}.save-status.err{color:var(--danger)}
+.owner{font-size:13px;color:var(--muted)}
+.appbar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+a.btn{text-decoration:none;display:inline-flex;align-items:center}
+.banner{background:var(--accent-soft);border:1px solid var(--accent);border-radius:10px;padding:10px 14px;font-size:13.5px}
+.banner a{color:var(--accent);font-weight:600}
+.modal-card.narrow{width:min(520px,100%)}
+.check.big{font-size:15px;font-weight:500}
+.hlist{display:flex;flex-direction:column;max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.hrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.hrow:last-child{border-bottom:0}
+.hrow span{display:flex;flex-direction:column}.hrow small{color:var(--muted);font-size:12px}
+.empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:24px}
+.empty h2{font-family:var(--display);margin:0}.empty p{margin:0;color:var(--muted);max-width:46ch}
+body.readonly .stage-note{display:none}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="appbar">
+    <a class="logo" id="logo" href="/app" aria-label="Untangle home"><span class="logo-mark" aria-hidden="true"></span>Untangle</a>
+    <div class="doc-meta">
+      <input id="doc-title" class="title-in" aria-label="Diagram title" maxlength="120" spellcheck="false">
+      <span class="kind" id="kind-tag"></span>
+      <span class="save-status" id="save-status" role="status"></span>
+      <span class="owner" id="owner"></span>
+    </div>
+    <div class="appbar-actions">
+      <div class="seg" id="mode-seg" role="group" aria-label="View">
+        <button id="m-edit" aria-pressed="true">Edit</button><button id="m-mmd" aria-pressed="false">Mermaid view</button>
+      </div>
+      <select class="in" id="demo-tpl" aria-label="Load a sample" hidden></select>
+      <button class="btn" id="b-history" hidden>History</button>
+      <button class="btn primary" id="b-share" hidden>Share</button>
+      <button class="btn primary" id="b-copy" hidden>Duplicate to my account</button>
+      <a class="btn primary" id="b-signup" href="/signup" hidden>Sign up to save</a>
+    </div>
+  </header>
+  <div class="banner" id="demo-banner" hidden>You're trying Untangle without an account. Your changes stay in this browser only. <a href="/signup">Create a free account</a> to save diagrams and share links.</div>
+
+  <div class="toolbar" role="toolbar" aria-label="Diagram tools">
+    <button class="tb" id="t-add" title="Add a box"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M12 9v6M9 12h6"/></svg><span id="t-add-l">Add table</span></button>
+    <button class="tb" id="t-connect" aria-pressed="false" title="Connect two boxes"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8 8l8 8"/></svg>Connect</button>
+    <button class="tb" id="t-tidy" title="Rearrange automatically"><svg viewBox="0 0 24 24"><path d="M4 6h7M4 12h11M4 18h16M15 4l3 2-3 2"/></svg>Tidy</button>
+    <span class="sep"></span>
+    <button class="tb" id="t-focus" aria-pressed="false" title="Fade everything not connected to the selected box"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>Focus</button>
+    <button class="tb" id="t-walk" aria-pressed="false" title="Step through the flow one choice at a time"><svg viewBox="0 0 24 24"><path d="M7 4l12 8-12 8z"/></svg>Walkthrough</button>
+    <span class="sep"></span>
+    <button class="tb" id="t-undo" title="Undo (Ctrl+Z)"><svg viewBox="0 0 24 24"><path d="M9 7L4 12l5 5"/><path d="M4 12h10a5 5 0 0 1 0 10h-3"/></svg>Undo</button>
+    <button class="tb" id="t-snap" aria-pressed="true" title="Snap to the grid"><svg viewBox="0 0 24 24"><path d="M4 4h4v4H4zM16 4h4v4h-4zM4 16h4v4H4zM16 16h4v4h-4z"/></svg>Snap</button>
+    <span class="sep"></span>
+    <button class="tb" id="t-zout" title="Zoom out" aria-label="Zoom out"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M8 11h6M16 16l4 4"/></svg></button>
+    <span class="zoomval" id="zoomval">100%</span>
+    <button class="tb" id="t-zin" title="Zoom in" aria-label="Zoom in"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M8 11h6M11 8v6M16 16l4 4"/></svg></button>
+    <button class="tb" id="t-fit" title="Fit to screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>Fit</button>
+    <span class="sep"></span>
+    <button class="tb" id="t-export" aria-expanded="false" aria-haspopup="true"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Export</button>
+    <span class="hint" id="hint" role="status"></span>
+    <div class="menu" id="export-menu" hidden role="menu">
+      <button role="menuitem" data-x="image"><b>Image (PNG or SVG)…</b><small>Pick size and background</small></button>
+      <button role="menuitem" data-x="md"><b>Markdown file (.md)</b><small>Renders as a diagram on GitHub</small></button>
+      <button role="menuitem" data-x="copy"><b>Copy Mermaid code</b><small>Layout kept in comments</small></button>
+    </div>
+  </div>
+
+  <div class="work">
+    <div class="stage" id="stage">
+      <svg id="svg" aria-label="Diagram editor">
+        <defs><pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse"><circle class="gridDot" cx="1" cy="1" r="1"/></pattern></defs>
+        <g id="world"></g>
+      </svg>
+      <input id="inline" hidden aria-label="Edit text">
+      <div class="toast" id="toast" role="status" hidden></div>
+      <div class="stage-note" id="stage-note"></div>
+    </div>
+
+    <aside class="side">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-inspect" aria-selected="true">Inspect</button>
+        <button role="tab" id="tab-code" aria-selected="false">Mermaid code</button>
+      </div>
+      <div class="pane" id="pane-inspect"></div>
+      <div class="pane" id="pane-code" hidden>
+        <p class="eyebrow">Paste, edit or copy Mermaid</p>
+        <textarea id="code" spellcheck="false" aria-label="Mermaid source"></textarea>
+        <div class="btns"><button class="btn primary" id="c-apply">Apply code</button><button class="btn" id="c-copy">Copy</button></div>
+        <p class="msg" id="c-msg" role="status"></p>
+        <p class="msg" style="color:var(--muted)">Supports <code>erDiagram</code> and <code>flowchart</code>. Positions, bends and notes are saved as <code>%%</code> comments at the end. Mermaid ignores them, so the file still works on GitHub and Notion.</p>
+      </div>
+    </aside>
+  </div>
+
+</div>
+
+<div class="modal" id="xmodal" hidden role="dialog" aria-modal="true" aria-labelledby="x-h">
+  <div class="modal-card">
+    <h3 id="x-h">Export image</h3>
+    <div class="xrow"><span>Format</span><div class="seg" id="x-fmt" role="group" aria-label="Format"><button data-v="png" aria-pressed="true">PNG</button><button data-v="svg" aria-pressed="false">SVG</button></div></div>
+    <div class="xrow" id="x-scale-row"><span>Size</span><div class="seg" id="x-scale" role="group" aria-label="Size"><button data-v="1" aria-pressed="false">1×</button><button data-v="2" aria-pressed="true">2×</button><button data-v="4" aria-pressed="false">4× print</button></div></div>
+    <div class="xrow"><span>Background</span><div class="seg" id="x-bg" role="group" aria-label="Background"><button data-v="light" aria-pressed="true">Light</button><button data-v="dark" aria-pressed="false">Dark</button><button data-v="transparent" aria-pressed="false">Transparent</button></div></div>
+    <div class="xprev" id="x-prev"><img id="x-img" alt="Preview of the exported image"></div>
+    <p class="msg" id="x-info"></p>
+    <div class="btns"><button class="btn primary" id="x-save">Save PNG</button><button class="btn" id="x-copy" hidden>Copy SVG code</button><button class="btn" id="x-close">Close</button></div>
+  </div>
+</div>
+
+
+<div class="modal" id="smodal" hidden role="dialog" aria-modal="true" aria-labelledby="s-h">
+  <div class="modal-card narrow">
+    <h3 id="s-h">Share this diagram</h3>
+    <label class="check big"><input type="checkbox" id="s-on"> Anyone with the link can view</label>
+    <div class="xrow" id="s-link-row" hidden><input class="in" id="s-link" readonly aria-label="Share link" style="flex:1;min-width:0"><button class="btn primary" id="s-copy">Copy link</button></div>
+    <p class="msg" id="s-msg" role="status"></p>
+    <div class="btns"><button class="btn" id="s-close">Done</button></div>
+  </div>
+</div>
+<div class="modal" id="hmodal" hidden role="dialog" aria-modal="true" aria-labelledby="h-h">
+  <div class="modal-card narrow">
+    <h3 id="h-h">Version history</h3>
+    <p class="msg" style="color:var(--muted)">A version is kept every few minutes while you work, up to the last 50.</p>
+    <div class="hlist" id="h-list"></div>
+    <div class="btns"><button class="btn" id="h-close">Close</button></div>
+  </div>
+</div>
+
+<script src="/js/templates.js"></script>
+<script src="/js/editor.js"></script>
+</body>
+</html>

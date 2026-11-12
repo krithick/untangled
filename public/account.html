@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account · Untangle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+<div class="container">
+  <nav class="nav">
+    <a class="logo" href="/app"><span class="logo-mark" aria-hidden="true"></span>Untangle</a>
+    <div class="nav-links"><a href="/app">My diagrams</a></div>
+  </nav>
+  <div class="narrow" style="margin:0 auto;padding-bottom:48px">
+    <div class="dash-head"><div><p class="eyebrow" id="email">Account</p><h1>Account settings</h1></div></div>
+    <form class="panel" id="name-form">
+      <h2>Profile</h2>
+      <div class="field"><label for="name">Name</label><input class="in" id="name" name="name" maxlength="80" required autocomplete="name"><small>Shown on diagrams you share.</small></div>
+      <p class="msg" id="name-msg" role="status"></p>
+      <div><button class="btn primary" type="submit">Save name</button></div>
+    </form>
+    <form class="panel" id="pw-form">
+      <h2>Password</h2>
+      <div class="field"><label for="current">Current password</label><input class="in" id="current" name="current" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label for="next">New password</label><input class="in" id="next" name="next" type="password" autocomplete="new-password" minlength="8" required><small>At least 8 characters. Other devices will be logged out.</small></div>
+      <p class="msg" id="pw-msg" role="status"></p>
+      <div><button class="btn primary" type="submit">Change password</button></div>
+    </form>
+    <form class="panel danger-zone" id="del-form">
+      <h2>Delete account</h2>
+      <p>This deletes your account, every diagram and every share link for good.</p>
+      <div class="field"><label for="del-pw">Type your password to confirm</label><input class="in" id="del-pw" name="password" type="password" autocomplete="current-password" required></div>
+      <p class="msg" id="del-msg" role="status"></p>
+      <div><button class="btn danger" type="submit">Delete my account</button></div>
+    </form>
+    <button class="btn" id="logout">Log out</button>
+  </div>
+</div>
+<script type="module" src="/js/account.js"></script>
+</body>
+</html>

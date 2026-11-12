@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in · Untangle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/site.css">
+</head>
+<body class="auth">
+<div class="container"><nav class="nav"><a class="logo" href="/"><span class="logo-mark" aria-hidden="true"></span>Untangle</a></nav></div>
+<main>
+  <form class="auth-card" id="auth-form" data-mode="login" novalidate>
+    <h1>Welcome back</h1>
+    <div class="field"><label for="email">Email</label><input class="in" id="email" name="email" type="email" autocomplete="email" required></div>
+    <div class="field"><label for="password">Password</label><input class="in" id="password" name="password" type="password" autocomplete="current-password" required></div>
+    <p class="msg" id="msg" role="alert"></p>
+    <button class="btn primary big" type="submit">Log in</button>
+    <p class="alt">New to Untangle? <a href="/signup" data-keep-next>Create a free account</a></p>
+  </form>
+</main>
+<script type="module" src="/js/auth.js"></script>
+</body>
+</html>
