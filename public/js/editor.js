@@ -126,7 +126,7 @@ const st=document.createElement("style");st.textContent=SVG_CSS+LIVE_CSS;documen
 let M={kind:"er",dir:"TD",nodes:[],edges:[]};
 let seq=0;const nid=()=>"n"+(++seq);
 const V={tx:0,ty:0,k:1};
-const S={sel:null,connect:false,src:null,snap:true,focus:false};
+const S={sel:null,connect:false,src:null,snap:true,focus:false,focusId:null};
 const W={on:false,trail:[],etrail:[]};
 let history=[];
 const byId=id=>M.nodes.find(n=>n.id===id);
@@ -141,6 +141,7 @@ const typeName=w=>w==="seq"?"Sequence diagram":TYPE_NAMES[w]||(w==="erDiagram"?"
 function parseMeta(t,meta){
   let m=t.match(/^%%\s*layout:\s*(\S+)\s+(-?[\d.]+)\s+(-?[\d.]+)/);if(m){meta.layout[m[1]]={x:+m[2],y:+m[3]};return}
   m=t.match(/^%%\s*bend:\s*(\S+)\s+(\S+)\s+(-?[\d.]+)\s+(-?[\d.]+)/);if(m){meta.bends.push({a:m[1],b:m[2],dx:+m[3],dy:+m[4]});return}
+  m=t.match(/^%%\s*lines:\s*(elbow|curved|straight)/);if(m){meta.lines=m[1];return}
   m=t.match(/^%%\s*note:\s*(\S+)\s+(.*)$/);if(m)meta.notes[m[1]]=m[2].replace(/\\n/g,"\n");
 }
 function parseER(src){
@@ -371,18 +372,17 @@ function build(src,keepPositions){
   const edges=P.edges.map(e=>{const b=P.meta.bends.find(x=>x.a===e.a&&x.b===e.b);
     const base={a:ids.get(e.a),b:ids.get(e.b),label:e.label||"",bend:b?{dx:b.dx,dy:b.dy}:null};
     return kind==="er"?Object.assign(base,{ka:e.ka,kb:e.kb,ident:e.ident}):mk==="class"?Object.assign(base,{ma:e.ma,mb:e.mb,dotted:!!e.dotted,la:e.la||"",lb:e.lb||""}):Object.assign(base,{style:e.style||"solid",arrow:e.arrow!==false})});
-  const model={kind:mk,flavor:P.flavor||"",dir:P.dir,nodes,edges};
+  const model={kind:mk,flavor:P.flavor||"",dir:P.dir,lineStyle:P.meta.lines||"elbow",nodes,edges};
   let missing=0;
   nodes.forEach(n=>{const L=P.meta.layout[n.key],o=old.get(n.key);if(L){n.x=L.x;n.y=L.y}else if(o){n.x=o.x;n.y=o.y}else missing++});
   if(missing){
-    if(mk==="flow"||mk==="class"||missing<nodes.length){layoutInto(model,missing===nodes.length)}
-    else{const cols=Math.max(1,Math.ceil(Math.sqrt(nodes.length)));nodes.forEach((n,i)=>{n.x=40+(i%cols)*250;n.y=40+Math.floor(i/cols)*230})}
+    layoutInto(model,missing===nodes.length);
   }
   return {model,errors:P.errors};
 }
 function layoutInto(model,all){
   const keep=M;M=model;M.nodes.forEach(measure);
-  if((M.kind==="flow"||M.kind==="class")&&all)layered();
+  if(all)layered();
   else{let maxY=0;M.nodes.forEach(n=>{if(!isNaN(n.y))maxY=Math.max(maxY,n.y+n.h)});let x=40;
     M.nodes.forEach(n=>{if(isNaN(n.x)){n.x=x;n.y=maxY+80;x+=n.w+40}})}
   M=keep;
@@ -406,13 +406,14 @@ function toMermaid(){
   else if(M.flavor==="state")stateBody(L);
   else flowBody(L);
   L.push("%% Layout saved by Untangle. Mermaid ignores these lines.");
+  if(M.lineStyle&&M.lineStyle!=="elbow")L.push(`%% lines: ${M.lineStyle}`);
   M.nodes.forEach(n=>L.push(`%% layout: ${n.key} ${Math.round(n.x)} ${Math.round(n.y)}`));
   M.edges.forEach(r=>{if(r.bend)L.push(`%% bend: ${byId(r.a).key} ${byId(r.b).key} ${Math.round(r.bend.dx)} ${Math.round(r.bend.dy)}`)});
   if(M.kind==="er"||(M.kind==="flow"&&M.flavor!=="state"))M.nodes.forEach(n=>{if(n.note&&n.note.trim())L.push(`%% note: ${n.key} ${n.note.trim().replace(/\n/g,"\\n")}`)});
   return L.join("\n");
 }
 
-const snapshot=()=>JSON.stringify({kind:M.kind,flavor:M.flavor,dir:M.dir,type:M.type,src:M.src,why:M.why,title:M.title,auto:M.auto,nodes:M.nodes.map(({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})=>({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})),edges:M.edges});
+const snapshot=()=>JSON.stringify({kind:M.kind,flavor:M.flavor,dir:M.dir,lineStyle:M.lineStyle,type:M.type,src:M.src,why:M.why,title:M.title,auto:M.auto,nodes:M.nodes.map(({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})=>({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})),edges:M.edges});
 function pushHistory(snap){if(snap&&snap!==snapshot()){history.push(snap);if(history.length>100)history.shift()}$("t-undo").disabled=!history.length}
 function mutate(fn){const s=snapshot();fn();pushHistory(s);changed()}
 function undo(){const s=history.pop();if(!s)return;const prevKind=M.kind;M=JSON.parse(s);if(S.sel&&!selExists())S.sel=null;if(W.on)walkStop();$("t-undo").disabled=!history.length;changed();if(prevKind!==M.kind){kindUI();fit()}}
@@ -460,7 +461,52 @@ function border(n,toward){
 }
 const unit=(a,b)=>{const dx=b.x-a.x,dy=b.y-a.y,l=Math.hypot(dx,dy)||1;return {x:dx/l,y:dy/l}};
 function relMid(r){const A=byId(r.a),B=byId(r.b);if(A===B)return {x:A.x+A.w+46,y:A.y-34};const a=ctr(A),b=ctr(B);return {x:(a.x+b.x)/2,y:(a.y+b.y)/2}}
+/* ---- connection routing: spread ports along box sides, then draw elbow, curved or straight lines ---- */
+const SIDEV={top:{x:0,y:-1},bottom:{x:0,y:1},left:{x:-1,y:0},right:{x:1,y:0}};
+const POINTY=["diamond","circle","choice","start","end","fork","join"];
+function assignPorts(){
+  const horizPref=(M.kind==="flow"||M.kind==="class")&&(M.dir==="LR"||M.dir==="RL");
+  const slots=new Map(),put=(n,side,item)=>{const k=n.id+"|"+side;if(!slots.has(k))slots.set(k,{n,side,items:[]});slots.get(k).items.push(item)};
+  M.edges.forEach(r=>{r._pA=r._pB=null;const A=byId(r.a),B=byId(r.b);if(!A||!B||A===B||r.bend||!A.w||!B.w)return;
+    const ovX=A.x<B.x+B.w&&B.x<A.x+A.w,ovY=A.y<B.y+B.h&&B.y<A.y+A.h,ca=ctr(A),cb=ctr(B);
+    const vert=horizPref?ovX:!ovY;let sA,sB;
+    if(vert){if(cb.y>=ca.y){sA="bottom";sB="top"}else{sA="top";sB="bottom"}}else{if(cb.x>=ca.x){sA="right";sB="left"}else{sA="left";sB="right"}}
+    r._sA=sA;r._sB=sB;put(A,sA,{r,end:"A",o:cb});put(B,sB,{r,end:"B",o:ca})});
+  slots.forEach(({n,side,items})=>{const h=side==="top"||side==="bottom";
+    items.sort((p,q)=>h?p.o.x-q.o.x:p.o.y-q.o.y);
+    const L=h?n.w:n.h,m=items.length,pointy=M.kind==="flow"&&POINTY.includes(n.shape);
+    const margin=Math.min(18,L/4),use=L-margin*2;
+    items.forEach((it,k)=>{const t=pointy?L/2:margin+use*(k+0.5)/m;
+      const p=side==="top"?{x:n.x+t,y:n.y}:side==="bottom"?{x:n.x+t,y:n.y+n.h}:side==="left"?{x:n.x,y:n.y+t}:{x:n.x+n.w,y:n.y+t};
+      if(it.end==="A")it.r._pA=p;else it.r._pB=p})});
+  /* stagger the middle segments of elbow lines that share the same gap so they don't sit on top of each other */
+  const bands=new Map();
+  M.edges.forEach(r=>{if(!r._pA||!r._pB)return;const v=r._sA==="top"||r._sA==="bottom";const mid=v?(r._pA.y+r._pB.y)/2:(r._pA.x+r._pB.x)/2;
+    const k=(v?"v":"h")+Math.round(mid/40);if(!bands.has(k))bands.set(k,[]);bands.get(k).push({r,c:v?(r._pA.x+r._pB.x)/2:(r._pA.y+r._pB.y)/2})});
+  bands.forEach(list=>{list.sort((p,q)=>p.c-q.c);const m=list.length;list.forEach((it,k)=>{it.r._off=m>1?Math.max(-36,Math.min(36,(k-(m-1)/2)*9)):0})});
+}
+function roundPath(pts,rad){let d=`M${pts[0].x} ${pts[0].y}`;
+  for(let i=1;i<pts.length-1;i++){const p=pts[i-1],c=pts[i],n=pts[i+1];const l1=Math.hypot(c.x-p.x,c.y-p.y),l2=Math.hypot(n.x-c.x,n.y-c.y);const r=Math.min(rad,l1/2,l2/2);
+    if(r<1){d+=`L${c.x} ${c.y}`;continue}const a={x:c.x-(c.x-p.x)/l1*r,y:c.y-(c.y-p.y)/l1*r},b={x:c.x+(n.x-c.x)/l2*r,y:c.y+(n.y-c.y)/l2*r};d+=`L${a.x} ${a.y}Q${c.x} ${c.y} ${b.x} ${b.y}`}
+  const e=pts[pts.length-1];return d+`L${e.x} ${e.y}`}
+function routedGeom(r){
+  const st=M.lineStyle||"elbow",uA=SIDEV[r._sA],uB=SIDEV[r._sB],pA=r._pA,pB=r._pB;
+  const end=M.kind==="flow"&&r.arrow?{x:pB.x+uB.x*9,y:pB.y+uB.y*9}:pB;
+  if(st==="straight"){return {pA,pB,H:{x:(pA.x+pB.x)/2,y:(pA.y+pB.y)/2},path:`M${pA.x} ${pA.y}L${end.x} ${end.y}`,uA:unit(pA,pB),uB:unit(pB,pA)}}
+  if(st==="curved"){const d=Math.max(30,Math.hypot(pB.x-pA.x,pB.y-pA.y)*0.4),c1={x:pA.x+uA.x*d,y:pA.y+uA.y*d},c2={x:pB.x+uB.x*d,y:pB.y+uB.y*d};
+    return {pA,pB,H:{x:.125*pA.x+.375*c1.x+.375*c2.x+.125*pB.x,y:.125*pA.y+.375*c1.y+.375*c2.y+.125*pB.y},path:`M${pA.x} ${pA.y}C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${end.x} ${end.y}`,uA,uB}}
+  const vA=r._sA==="top"||r._sA==="bottom",vB=r._sB==="top"||r._sB==="bottom",off=r._off||0;let pts;
+  if(vA&&vB){const my=(pA.y+pB.y)/2+off;pts=[pA,{x:pA.x,y:my},{x:end.x,y:my},end]}
+  else if(!vA&&!vB){const mx=(pA.x+pB.x)/2+off;pts=[pA,{x:mx,y:pA.y},{x:mx,y:end.y},end]}
+  else if(vA)pts=[pA,{x:pA.x,y:end.y},end];else pts=[pA,{x:end.x,y:pA.y},end];
+  let H;if(pts.length===4)H={x:(pts[1].x+pts[2].x)/2,y:(pts[1].y+pts[2].y)/2};else{const l1=Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y),l2=Math.hypot(pts[2].x-pts[1].x,pts[2].y-pts[1].y);H=l1>l2?{x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2}:{x:(pts[1].x+pts[2].x)/2,y:(pts[1].y+pts[2].y)/2}}
+  return {pA,pB,H,path:roundPath(pts,10),uA,uB};
+}
+const isMany=k=>k==="zeroMany"||k==="oneMany",isOne=k=>k==="one"||k==="zeroOne";
+/* ER: draw the "one" side above the "many" side */
+const flowDir=e=>M.kind==="er"&&isMany(e.ka)&&isOne(e.kb)?[e.b,e.a]:[e.a,e.b];
 function geom(r){
+  if(r._pA&&r._pB&&!r.bend&&r.a!==r.b)return routedGeom(r);
   const A=byId(r.a),B=byId(r.b);const mid=relMid(r);
   let H=r.bend?{x:mid.x+r.bend.dx,y:mid.y+r.bend.dy}:mid,pA,pB,C=null;
   if(A===B){pA={x:A.x+A.w,y:A.y+Math.min(HEAD/2,A.h/2)};pB={x:A.x+A.w-Math.min(34,A.w/3),y:A.y}}
@@ -485,17 +531,16 @@ function arrowHead(p,u){const n={x:-u.y,y:u.x},b={x:p.x+u.x*11,y:p.y+u.y*11};ret
 function litSets(){
   if(M.kind==="seq"){
     if(W.on){const e=M.edges[W.si];return {mode:"seqwalk",si:W.si,nodes:new Set(e?[e.a,e.b].filter(Boolean):[])}}
-    if(!S.focus||!S.sel)return null;const nodes=new Set(),edges=new Set();
-    if(S.sel.type==="node"){nodes.add(S.sel.id);M.edges.forEach((e,i)=>{if(e.a===S.sel.id||e.b===S.sel.id){edges.add(i);nodes.add(e.a);if(e.b)nodes.add(e.b)}})}
-    else{const e=M.edges[S.sel.i];edges.add(S.sel.i);nodes.add(e.a);if(e.b)nodes.add(e.b)}
+    if(!S.focus||!S.focusId||!byId(S.focusId))return null;const nodes=new Set([S.focusId]),edges=new Set();
+    M.edges.forEach((e,i)=>{if(e.a===S.focusId||e.b===S.focusId){edges.add(i);if(e.a)nodes.add(e.a);if(e.b)nodes.add(e.b)}});
     return {mode:"focus",nodes,edges}}
   if(W.on&&M.kind==="flow"){const cur=W.trail[W.trail.length-1];const outs=M.edges.map((e,i)=>[e,i]).filter(([e])=>e.a===cur);
     return {mode:"walk",cur,visited:new Set(W.trail),next:new Set(outs.map(([e])=>e.b)),walked:new Set(W.etrail),nexte:new Set(outs.map(([,i])=>i))}}
-  if(!S.focus||!S.sel)return null;
-  let seeds=S.sel.type==="node"?[S.sel.id]:[M.edges[S.sel.i].a,M.edges[S.sel.i].b];
+  if(!S.focus||!S.focusId||!byId(S.focusId))return null;
+  const seeds=[S.focusId];
   const nodes=new Set(seeds),edges=new Set();
-  if(S.sel.type==="edge")edges.add(S.sel.i);
-  else if(M.kind==="er"||M.kind==="class"){M.edges.forEach((e,i)=>{if(e.a===seeds[0]||e.b===seeds[0]){nodes.add(e.a);nodes.add(e.b);edges.add(i)}})}
+  if(isGroup(byId(S.focusId)))descendants(S.focusId).forEach(c=>nodes.add(c.id));
+  if(M.kind==="er"||M.kind==="class"){M.edges.forEach((e,i)=>{if(e.a===seeds[0]||e.b===seeds[0]){nodes.add(e.a);nodes.add(e.b);edges.add(i)}})}
   else{
     const walk=(dirA,dirB)=>{const seen=new Set([seeds[0]]),q=[seeds[0]];while(q.length){const c=q.shift();M.edges.forEach((e,i)=>{if(e[dirA]===c){edges.add(i);if(!seen.has(e[dirB])){seen.add(e[dirB]);nodes.add(e[dirB]);q.push(e[dirB])}}})}};
     walk("a","b");walk("b","a");
@@ -506,7 +551,7 @@ function litSets(){
 /* ================= drawing ================= */
 function renderInner(plain){
   if(M.kind==="seq")return renderSeq(plain);
-  M.nodes.forEach(measure);layoutGroups();
+  M.nodes.forEach(measure);layoutGroups();assignPorts();
   const L=plain?null:litSets();
   let out=groupBoxes(plain,L),labs="";
   M.edges.forEach((r,i)=>{
@@ -594,7 +639,7 @@ async function drawMermaid(){
 function applyView(){world.setAttribute("transform",`translate(${V.tx},${V.ty}) scale(${V.k})`);$("zoomval").textContent=Math.round(V.k*100)+"%";updateMinimap()}
 function toWorld(ev){const r=svg.getBoundingClientRect();return {x:(ev.clientX-r.left-V.tx)/V.k,y:(ev.clientY-r.top-V.ty)/V.k}}
 function zoomAt(k,px,py){k=Math.min(2.5,Math.max(.2,k));V.tx=px-(px-V.tx)*(k/V.k);V.ty=py-(py-V.ty)*(k/V.k);V.k=k;applyView()}
-function bbox(){if(viewing())return MV&&MV.w?{x0:0,y0:0,x1:MV.w,y1:MV.h}:{x0:0,y0:0,x1:400,y1:300};if(M.kind==="seq")return seqBBox();M.nodes.forEach(measure);layoutGroups();let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+function bbox(){if(viewing())return MV&&MV.w?{x0:0,y0:0,x1:MV.w,y1:MV.h}:{x0:0,y0:0,x1:400,y1:300};if(M.kind==="seq")return seqBBox();M.nodes.forEach(measure);layoutGroups();assignPorts();let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
   M.nodes.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
   M.edges.forEach(e=>{if(!byId(e.a)||!byId(e.b))return;const H=geom(e).H;x0=Math.min(x0,H.x-60);x1=Math.max(x1,H.x+60);y0=Math.min(y0,H.y-14);y1=Math.max(y1,H.y+14)});
   return {x0,y0,x1,y1}}
@@ -636,11 +681,13 @@ function layerUnits(U,E,horiz){
       const bc=v=>nb(v).length?nb(v).reduce((t,u)=>t+pos[u],0)/nb(v).length:pos[v];
       L.sort((x,y)=>bc(x)-bc(y));L.forEach((v,j)=>{pos[v]=j})})}
   const P=U.map(()=>({x:0,y:0}));let along=0;
+  const GAPX=horiz?36:50,GAPL=horiz?100:90,len=v=>horiz?U[v].h:U[v].w,thk=v=>horiz?U[v].w:U[v].h;
+  const maxRow=Math.max(1400,Math.sqrt(U.reduce((t,u)=>t+(u.w+60)*(u.h+90),0))*1.7);
   layers.forEach(L=>{if(!L)return;
-    const thick=Math.max(...L.map(v=>horiz?U[v].w:U[v].h));
-    const total=L.reduce((t,v)=>t+(horiz?U[v].h:U[v].w),0)+(L.length-1)*(horiz?36:50);let across=-total/2;
-    L.forEach(v=>{const u=U[v];if(horiz){P[v]={x:along+(thick-u.w)/2,y:across};across+=u.h+36}else{P[v]={x:across,y:along+(thick-u.h)/2};across+=u.w+50}});
-    along+=thick+(horiz?90:70)});
+    const rows=[[]];let used=0;L.forEach(v=>{if(rows[rows.length-1].length&&used+len(v)>maxRow){rows.push([]);used=0}rows[rows.length-1].push(v);used+=len(v)+GAPX});
+    rows.forEach((row,ri)=>{const thick=Math.max(...row.map(thk));const total=row.reduce((t,v)=>t+len(v),0)+(row.length-1)*GAPX;let across=-total/2;
+      row.forEach(v=>{const u=U[v];if(horiz){P[v]={x:along+(thick-u.w)/2,y:across};across+=u.h+GAPX}else{P[v]={x:across,y:along+(thick-u.h)/2};across+=u.w+GAPX}});
+      along+=thick+(ri<rows.length-1?40:GAPL)})});
   return {pos:P,back};
 }
 let BACK=new Set();
@@ -650,7 +697,7 @@ function layoutScope(gid,horiz){
   layoutGroups();
   const index=new Map(units.map((u,i)=>[u.id,i]));
   const unitOf=id=>{let nd=byId(id);const seen=new Set();while(nd&&!seen.has(nd.id)){seen.add(nd.id);if(parentOf(nd)===gid)return index.get(nd.id);nd=byId(parentOf(nd))}return undefined};
-  const E=[],which=[];M.edges.forEach((e,k)=>{const a=unitOf(e.a),b=unitOf(e.b);if(a!==undefined&&b!==undefined&&a!==b){E.push([a,b]);which.push(k)}});
+  const E=[],which=[];M.edges.forEach((e,k)=>{const [fa,fb]=flowDir(e);const a=unitOf(fa),b=unitOf(fb);if(a!==undefined&&b!==undefined&&a!==b){E.push([a,b]);which.push(k)}});
   const place=(u,p)=>{if(isGroup(u))shiftUnit(u,p.x-(u.x||0),p.y-(u.y||0));else{u.x=p.x;u.y=p.y}};
   const comps=gid===null?compsOf(units.length,E):[];
   if(comps.length>1){
@@ -704,7 +751,7 @@ function force(){
   all.forEach(n=>{n.x=Math.round((n.x-mx+60)/10)*10;n.y=Math.round((n.y-my+60)/10)*10});
   M.edges.forEach(r=>r.bend=null);
 }
-function tidy(){mutate(()=>{if(M.kind==="flow"||M.kind==="class")layered();else force()});fit()}
+function tidy(){mutate(()=>{if(M.kind==="er"&&M.tidyStyle==="organic")force();else layered()});fit()}
 
 /* ================= pointer interaction ================= */
 let drag=null,last=null;
@@ -724,13 +771,15 @@ svg.addEventListener("pointerdown",ev=>{
       if(M.kind==="flow"&&kind==="node"){const cur=W.trail[W.trail.length-1];const ei=M.edges.findIndex(e=>e.a===cur&&e.b===a);if(ei>=0){walkStep(ei);return}}}
     else{S.sel=(kind==="node"||kind==="title"||kind==="attr"||kind==="mem")?{type:"node",id:a}:(kind==="rel"||kind==="label"||kind==="end")?{type:"edge",i:+a}:null;draw();inspector()}
     drag={mode:"pan",sx:ev.clientX,sy:ev.clientY,tx:V.tx,ty:V.ty};svg.classList.add("panning");return}
-  if(M.kind==="seq"){if(dbl&&!W.on){ev.preventDefault();seqDouble(kind,a,b,w);return}seqDown(ev,kind,a,b,w);return}
+  if(M.kind==="seq"){if(dbl&&!W.on&&S.focus&&kind==="node"){ev.preventDefault();S.focusId=a;draw();return}if(dbl&&!W.on){ev.preventDefault();seqDouble(kind,a,b,w);return}seqDown(ev,kind,a,b,w);return}
+  if(dbl&&!W.on&&S.focus&&["node","title","attr","mem"].includes(kind)){ev.preventDefault();S.focusId=a;draw();toast(`Focused on ${nodeLabel(byId(a))}`);return}
   if(dbl&&!W.on){ev.preventDefault();onDouble(kind,a,b,w);return}
   svg.setPointerCapture(ev.pointerId);
   if(kind==="node"||kind==="title"||kind==="attr"||kind==="mem"){
     const n=byId(a);
     if(W.on){const cur=W.trail[W.trail.length-1];const ei=M.edges.findIndex(e=>e.a===cur&&e.b===a);if(ei>=0){walkStep(ei);return}}
     if(S.connect){connectClick(n);return}
+    if(S.focus&&!S.focusId)S.focusId=a;
     if(!(S.sel&&S.sel.type==="node"&&S.sel.id===a)){S.sel={type:"node",id:a};draw();if(!W.on)inspector()}
     drag=isGroup(n)?{mode:"group",n,sx:w.x,sy:w.y,kids:descendants(n.id).filter(c=>!isGroup(c)).map(c=>({c,x:c.x,y:c.y})),snap:snapshot(),moved:false}
       :{mode:"node",n,ox:w.x-n.x,oy:w.y-n.y,snap:snapshot(),moved:false};
@@ -740,8 +789,7 @@ svg.addEventListener("pointerdown",ev=>{
     drag=kind==="label"?{mode:"bend",r:M.edges[i],snap:snapshot(),moved:false}:null;
   }else{
     if(S.connect)setConnect(false);
-    if(S.sel){S.sel=null;draw();if(!W.on)inspector()}
-    drag={mode:"pan",sx:ev.clientX,sy:ev.clientY,tx:V.tx,ty:V.ty};svg.classList.add("panning");
+    drag={mode:"pan",sx:ev.clientX,sy:ev.clientY,tx:V.tx,ty:V.ty,bg:true};svg.classList.add("panning");
   }
 });
 svg.addEventListener("pointermove",ev=>{
@@ -752,9 +800,10 @@ svg.addEventListener("pointermove",ev=>{
   else if(drag.mode==="group"){let dx=w.x-drag.sx,dy=w.y-drag.sy;if(S.snap){dx=Math.round(dx/10)*10;dy=Math.round(dy/10)*10}
     drag.kids.forEach(k=>{k.c.x=k.x+dx;k.c.y=k.y+dy});drag.moved=true;draw()}
   else if(drag.mode==="bend"){const m=relMid(drag.r);drag.r.bend={dx:w.x-m.x,dy:w.y-m.y};drag.moved=true;draw()}
-  else if(drag.mode==="pan"){V.tx=drag.tx+ev.clientX-drag.sx;V.ty=drag.ty+ev.clientY-drag.sy;applyView()}
+  else if(drag.mode==="pan"){if(Math.abs(ev.clientX-drag.sx)+Math.abs(ev.clientY-drag.sy)>3)drag.panned=true;V.tx=drag.tx+ev.clientX-drag.sx;V.ty=drag.ty+ev.clientY-drag.sy;applyView()}
 });
-function endDrag(){if(drag&&drag.moved){pushHistory(drag.snap);syncCode();save();if(S.sel&&!W.on)inspector()}drag=null;svg.classList.remove("panning")}
+function endDrag(){if(drag&&drag.mode==="pan"&&drag.bg&&!drag.panned&&S.sel&&!W.on){S.sel=null;draw();inspector()}
+  if(drag&&drag.moved){pushHistory(drag.snap);syncCode();save();if(S.sel&&!W.on)inspector()}drag=null;svg.classList.remove("panning")}
 svg.addEventListener("pointerup",endDrag);svg.addEventListener("pointercancel",endDrag);
 svg.addEventListener("wheel",ev=>{ev.preventDefault();const r=svg.getBoundingClientRect();zoomAt(V.k*Math.exp(-ev.deltaY*0.0015),ev.clientX-r.left,ev.clientY-r.top)},{passive:false});
 
@@ -964,13 +1013,12 @@ function seqDown(ev,kind,a,b,w){
   svg.setPointerCapture(ev.pointerId);
   if(W.on){if(kind==="rel"||kind==="end")walkTo(+a);else drag={mode:"pan",sx:ev.clientX,sy:ev.clientY,tx:V.tx,ty:V.ty};return}
   if(S.connect&&(kind==="node"||kind==="bg"||kind==="rel")){const n=kind==="node"?byId(a):nearestLifeline(w.x,40);if(n){seqConnect(n);return}}
-  if(kind==="node"){if(!(S.sel&&S.sel.type==="node"&&S.sel.id===a)){S.sel={type:"node",id:a};draw();inspector()}
+  if(kind==="node"){if(S.focus&&!S.focusId)S.focusId=a;if(!(S.sel&&S.sel.type==="node"&&S.sel.id===a)){S.sel={type:"node",id:a};draw();inspector()}
     drag={mode:"seqcol",n:byId(a),snap:snapshot(),moved:false};return}
   if(kind==="end"){const i=+a;if(!(S.sel&&S.sel.type==="edge"&&S.sel.i===i)){S.sel={type:"edge",i};draw();inspector()}drag={mode:"seqend",i,end:b,snap:snapshot(),moved:false};return}
   if(kind==="rel"){const i=+a;if(!(S.sel&&S.sel.type==="edge"&&S.sel.i===i)){S.sel={type:"edge",i};draw();inspector()}drag={mode:"seqrow",i,snap:snapshot(),moved:false};return}
   if(S.connect)setConnect(false);
-  if(S.sel){S.sel=null;draw();inspector()}
-  drag={mode:"pan",sx:ev.clientX,sy:ev.clientY,tx:V.tx,ty:V.ty};svg.classList.add("panning");
+  drag={mode:"pan",sx:ev.clientX,sy:ev.clientY,tx:V.tx,ty:V.ty,bg:true};svg.classList.add("panning");
 }
 function seqMove(w){
   if(drag.mode==="seqcol"){const others=M.nodes.filter(x=>x!==drag.n);const k=others.filter(x=>M._seq.cx.get(x.id)<w.x).length;const cur=M.nodes.indexOf(drag.n);
@@ -1252,7 +1300,9 @@ $("t-connect").onclick=()=>setConnect(!S.connect);
 $("t-tidy").onclick=tidy;
 $("t-undo").onclick=undo;
 $("t-snap").onclick=()=>{S.snap=!S.snap;$("t-snap").setAttribute("aria-pressed",S.snap)};
-$("t-focus").onclick=()=>{S.focus=!S.focus;$("t-focus").setAttribute("aria-pressed",S.focus);if(S.focus&&W.on)walkStop();if(S.focus&&!S.sel)toast("Select a box to see what it's connected to");draw()};
+$("t-focus").onclick=()=>{S.focus=!S.focus;$("t-focus").setAttribute("aria-pressed",S.focus);if(S.focus&&W.on)walkStop();
+  S.focusId=S.focus?(S.sel?(S.sel.type==="node"?S.sel.id:(M.edges[S.sel.i]||{}).a||null):null):null;
+  if(S.focus)toast(S.focusId?`Focused on ${nodeLabel(byId(S.focusId))}. Double-click another box to switch, or press Focus to stop.`:"Click a box to focus on it. Double-click another box to switch.");draw()};
 $("t-walk").onclick=()=>{if(M.kind==="seq"){if(W.on)walkStop();else seqWalkStart();return}if(M.kind!=="flow")return;if(W.on)walkStop();else{const s=startNodes();walkStart(s[0].id)}};
 $("t-fit").onclick=()=>fit(true);
 $("t-zin").onclick=()=>{const r=svg.getBoundingClientRect();zoomAt(V.k*1.2,r.width/2,r.height/2)};
@@ -1322,6 +1372,10 @@ function inspector(){
     const K=er?["ER diagram","Tables","Relationships","table"]:cl?["Class diagram","Classes","Relationships","class"]:stt?["State diagram","States","Transitions","state"]:["Flowchart","Steps","Connections","step"];
     pane.innerHTML=`<p class="eyebrow">${K[0]}</p><h2>${esc(DOC_TITLE)}</h2>
       <div class="stats"><div class="stat"><b>${M.nodes.filter(n=>!isGroup(n)).length}</b><span>${K[1]}</span></div><div class="stat"><b>${M.edges.length}</b><span>${K[2]}</span></div></div>
+      <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="field"><label for="i-lines">Lines</label><select class="in" id="i-lines">${[["elbow","Elbow"],["curved","Curved"],["straight","Straight"]].map(([v,l])=>`<option value="${v}"${(M.lineStyle||"elbow")===v?" selected":""}>${l}</option>`).join("")}</select></div>
+        ${er?`<div class="field"><label for="i-tidy">Tidy style</label><select class="in" id="i-tidy"><option value="hierarchy"${M.tidyStyle!=="organic"?" selected":""}>Parents above children</option><option value="organic"${M.tidyStyle==="organic"?" selected":""}>Organic</option></select></div>`:""}
+      </div>
       ${er?"":`<div class="field"><label for="i-dir">Direction</label><select class="in" id="i-dir">${[["TD","Top to bottom"],["LR","Left to right"],["BT","Bottom to top"],["RL","Right to left"]].map(([v,l])=>`<option value="${v}"${M.dir===v?" selected":""}>${l}</option>`).join("")}</select></div>`}
       <p class="eyebrow">What you can do</p>
       <ul class="tips">
@@ -1335,6 +1389,8 @@ function inspector(){
         <li><b>Export</b> as PNG, SVG or Markdown, or copy the Mermaid.</li>
       </ul>`;
     if($("i-dir"))$("i-dir").onchange=e=>{mutate(()=>{M.dir=e.target.value;layered()});fit()};
+    $("i-lines").onchange=e=>mutate(()=>{M.lineStyle=e.target.value});
+    if($("i-tidy"))$("i-tidy").onchange=e=>{M.tidyStyle=e.target.value;tidy()};
     return}
   if(S.sel.type==="node"){
     const n=byId(S.sel.id);

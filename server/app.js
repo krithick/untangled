@@ -309,7 +309,11 @@ export function createApp({ db, secureCookies = false } = {}) {
   app.get("/s/:token", page("editor.html"));
   app.get("/demo", page("editor.html"));
   app.get("/vendor/mermaid.min.js", (req, res) => res.sendFile(MERMAID_FILE, { maxAge: "7d" }));
-  app.use(express.static(PUBLIC, { index: false, maxAge: "1h" }));
+  // Scripts and styles change with every release: make browsers check for a newer copy each time (cheap with ETags).
+  app.use(express.static(PUBLIC, {
+    index: false, maxAge: "1h",
+    setHeaders: (res, file) => { if (/\.(js|css|html)$/.test(file)) res.setHeader("Cache-Control", "no-cache"); },
+  }));
 
   app.use((req, res) => res.status(404).sendFile(path.join(PUBLIC, "404.html")));
 
