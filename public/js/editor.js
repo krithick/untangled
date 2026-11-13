@@ -417,7 +417,7 @@ function pushHistory(snap){if(snap&&snap!==snapshot()){history.push(snap);if(his
 function mutate(fn){const s=snapshot();fn();pushHistory(s);changed()}
 function undo(){const s=history.pop();if(!s)return;const prevKind=M.kind;M=JSON.parse(s);if(S.sel&&!selExists())S.sel=null;if(W.on)walkStop();$("t-undo").disabled=!history.length;changed();if(prevKind!==M.kind){kindUI();fit()}}
 function selExists(){return S.sel.type==="node"?!!byId(S.sel.id):!!M.edges[S.sel.i]}
-function changed(){draw();syncCode();save();inspector()}
+function changed(){draw();syncCode();save();inspector();refreshFind()}
 function save(){appSave()}
 function uniqueKey(base,except){let n=base,i=2;while(M.nodes.some(e=>e.key===n&&e.id!==except))n=`${base}_${i++}`;return n}
 const cleanName=s=>s.trim().replace(/\s+/g,"_").replace(/[^\w-]/g,"").toUpperCase();
@@ -591,7 +591,7 @@ async function drawMermaid(){
   if($("v-err")){$("v-err").textContent=MV.err||"";$("v-err").hidden=!MV.err}else inspector();
 }
 
-function applyView(){world.setAttribute("transform",`translate(${V.tx},${V.ty}) scale(${V.k})`);$("zoomval").textContent=Math.round(V.k*100)+"%"}
+function applyView(){world.setAttribute("transform",`translate(${V.tx},${V.ty}) scale(${V.k})`);$("zoomval").textContent=Math.round(V.k*100)+"%";updateMinimap()}
 function toWorld(ev){const r=svg.getBoundingClientRect();return {x:(ev.clientX-r.left-V.tx)/V.k,y:(ev.clientY-r.top-V.ty)/V.k}}
 function zoomAt(k,px,py){k=Math.min(2.5,Math.max(.2,k));V.tx=px-(px-V.tx)*(k/V.k);V.ty=py-(py-V.ty)*(k/V.k);V.k=k;applyView()}
 function bbox(){if(viewing())return MV&&MV.w?{x0:0,y0:0,x1:MV.w,y1:MV.h}:{x0:0,y0:0,x1:400,y1:300};if(M.kind==="seq")return seqBBox();M.nodes.forEach(measure);layoutGroups();let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
@@ -651,6 +651,15 @@ function layoutScope(gid,horiz){
   const index=new Map(units.map((u,i)=>[u.id,i]));
   const unitOf=id=>{let nd=byId(id);const seen=new Set();while(nd&&!seen.has(nd.id)){seen.add(nd.id);if(parentOf(nd)===gid)return index.get(nd.id);nd=byId(parentOf(nd))}return undefined};
   const E=[],which=[];M.edges.forEach((e,k)=>{const a=unitOf(e.a),b=unitOf(e.b);if(a!==undefined&&b!==undefined&&a!==b){E.push([a,b]);which.push(k)}});
+  const place=(u,p)=>{if(isGroup(u))shiftUnit(u,p.x-(u.x||0),p.y-(u.y||0));else{u.x=p.x;u.y=p.y}};
+  const comps=gid===null?compsOf(units.length,E):[];
+  if(comps.length>1){
+    comps.forEach(ci=>{const loc=new Map(ci.map((g,k)=>[g,k]));const sub=[],subW=[];E.forEach(([x,y],j)=>{if(loc.has(x)&&loc.has(y)){sub.push([loc.get(x),loc.get(y)]);subW.push(which[j])}});
+      const r=layerUnits(ci.map(i=>({w:units[i].w||100,h:units[i].h||40})),sub,horiz);ci.forEach((ui,k)=>place(units[ui],r.pos[k]));
+      sub.forEach(([x,y],j)=>{if(r.back.has(x+">"+y))BACK.add(subW[j])})});
+    layoutGroups();
+    packBoxes(comps.map(ci=>{const us=ci.map(i=>units[i]);return boxOf(us,(dx,dy)=>us.forEach(u=>shiftUnit(u,dx,dy)))}),90);
+    layoutGroups();return}
   const {pos,back}=layerUnits(units.map(u=>({w:u.w||100,h:u.h||40})),E,horiz);
   units.forEach((u,i)=>{if(isGroup(u)){const dx=pos[i].x-(u.x||0),dy=pos[i].y-(u.y||0);descendants(u.id).forEach(c=>{if(!isGroup(c)){c.x+=dx;c.y+=dy}})}else{u.x=pos[i].x;u.y=pos[i].y}});
   layoutGroups();
@@ -668,11 +677,12 @@ function layered(){
   M.edges.forEach((e,k)=>{const a=byId(e.a),b=byId(e.b);if(!a||!b||a===b||!BACK.has(k))return;
     const off=horiz?{dx:0,dy:Math.max(a.h,b.h)/2+60}:{dx:Math.max(a.w,b.w)/2+70,dy:0};e.bend=off});
 }
-function force(){
-  const N=M.nodes,n=N.length,idx=new Map(N.map((e,i)=>[e.id,i]));N.forEach(measure);
-  const P=N.map((e,i)=>({x:Math.cos(i*2.4)*150*Math.sqrt(i+1),y:Math.sin(i*2.4)*150*Math.sqrt(i+1)}));const K=200;
-  for(let it=0;it<500;it++){
-    const D=P.map(()=>({x:0,y:0}));
+function forceComp(N){
+  const n=N.length,idx=new Map(N.map((e,i)=>[e.id,i]));
+  const avg=N.reduce((t,e)=>t+Math.sqrt(e.w*e.h),0)/Math.max(1,n);const K=Math.max(90,Math.min(200,avg*1.5));
+  const P=N.map((e,i)=>({x:Math.cos(i*2.4)*K*0.7*Math.sqrt(i+1),y:Math.sin(i*2.4)*K*0.7*Math.sqrt(i+1)}));
+  if(n>1)for(let it=0;it<500;it++){
+    const D=P.map(p=>({x:-p.x*0.06*Math.sqrt(n),y:-p.y*0.06*Math.sqrt(n)}));
     for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){let dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.max(1,Math.hypot(dx,dy));const f=K*K/d;D[i].x+=dx/d*f;D[i].y+=dy/d*f;D[j].x-=dx/d*f;D[j].y-=dy/d*f}
     M.edges.forEach(r=>{const i=idx.get(r.a),j=idx.get(r.b);if(i===j||i===undefined||j===undefined)return;let dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.max(1,Math.hypot(dx,dy));const f=d*d/K;D[i].x-=dx/d*f;D[i].y-=dy/d*f;D[j].x+=dx/d*f;D[j].y+=dy/d*f});
     const T=80*(1-it/500)+1;P.forEach((p,i)=>{const d=Math.hypot(D[i].x,D[i].y)||1;p.x+=D[i].x/d*Math.min(d,T);p.y+=D[i].y/d*Math.min(d,T)});
@@ -682,8 +692,16 @@ function force(){
       const ox=(a.w+b.w)/2+gap-Math.abs(P[i].x-P[j].x),oy=(a.h+b.h)/2+gap-Math.abs(P[i].y-P[j].y);
       if(ox>0&&oy>0){moved=true;if(ox<oy){const s=P[i].x<P[j].x?-1:1;P[i].x+=s*ox/2;P[j].x-=s*ox/2}else{const s=P[i].y<P[j].y?-1:1;P[i].y+=s*oy/2;P[j].y-=s*oy/2}}}
     if(!moved)break}
-  let mx=1e9,my=1e9;N.forEach((e,i)=>{mx=Math.min(mx,P[i].x-e.w/2);my=Math.min(my,P[i].y-e.h/2)});
-  N.forEach((e,i)=>{e.x=Math.round((P[i].x-e.w/2-mx+60)/10)*10;e.y=Math.round((P[i].y-e.h/2-my+60)/10)*10});
+  N.forEach((e,i)=>{e.x=P[i].x-e.w/2;e.y=P[i].y-e.h/2});
+}
+function force(){
+  const all=M.nodes;if(!all.length)return;all.forEach(measure);const idx=new Map(all.map((e,i)=>[e.id,i]));
+  const E=[];M.edges.forEach(r=>{const i=idx.get(r.a),j=idx.get(r.b);if(i!==undefined&&j!==undefined&&i!==j)E.push([i,j])});
+  const comps=compsOf(all.length,E).map(ci=>ci.map(i=>all[i]));
+  comps.forEach(forceComp);
+  packBoxes(comps.map(ns=>boxOf(ns,(dx,dy)=>ns.forEach(n=>{n.x+=dx;n.y+=dy}))),90);
+  let mx=1e9,my=1e9;all.forEach(n=>{mx=Math.min(mx,n.x);my=Math.min(my,n.y)});
+  all.forEach(n=>{n.x=Math.round((n.x-mx+60)/10)*10;n.y=Math.round((n.y-my+60)/10)*10});
   M.edges.forEach(r=>r.bend=null);
 }
 function tidy(){mutate(()=>{if(M.kind==="flow"||M.kind==="class")layered();else force()});fit()}
@@ -1157,6 +1175,77 @@ function editEl(el,value,commit){
   inline.style.width=Math.min(c.width-8,Math.max(Math.min(r.width+40,320),170))+"px";
   inline.value=value;inline.hidden=false;inline._commit=commit;requestAnimationFrame(()=>{inline.focus();inline.select()});
 }
+/* ================= big diagrams: packing, minimap, find, jump from code, full screen ================= */
+function compsOf(n,E){const par=[...Array(n).keys()];const f=i=>par[i]===i?i:(par[i]=f(par[i]));E.forEach(([a,b])=>{par[f(a)]=f(b)});const m=new Map();for(let i=0;i<n;i++){const r=f(i);if(!m.has(r))m.set(r,[]);m.get(r).push(i)}return [...m.values()]}
+/* Shelf-pack separate parts of a diagram into a compact block instead of letting them drift apart. */
+function packBoxes(items,gap){if(items.length<2)return;
+  items.sort((a,b)=>b.w*b.h-a.w*a.h);
+  const area=items.reduce((s,b)=>s+(b.w+gap)*(b.h+gap),0);const rowW=Math.max(items[0].w,Math.sqrt(area)*1.6);
+  let x=0,y=0,rowH=0;items.forEach(b=>{if(x>0&&x+b.w>rowW){x=0;y+=rowH+gap;rowH=0}b.move(x-b.x0,y-b.y0);x+=b.w+gap;rowH=Math.max(rowH,b.h)})}
+function boxOf(list,move){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;list.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+(n.w||0));y1=Math.max(y1,n.y+(n.h||0))});return {x0,y0,w:x1-x0,h:y1-y0,move}}
+function shiftUnit(u,dx,dy){if(isGroup(u))descendants(u.id).forEach(c=>{if(!isGroup(c)){c.x+=dx;c.y+=dy}});else{u.x+=dx;u.y+=dy}}
+const mm=$("minimap");let mmMap=null,mmDrag=false;
+const mmShow=v=>{if(v)mm.removeAttribute("hidden");else mm.setAttribute("hidden","")};
+function updateMinimap(){if(!mm)return;const r=svg.getBoundingClientRect();if(!r.width){mmShow(false);return}
+  if(!viewing()&&!M.nodes.length){mmShow(false);return}
+  let b;try{b=bbox()}catch(e){mmShow(false);return}
+  const vx0=-V.tx/V.k,vy0=-V.ty/V.k,vw=r.width/V.k,vh=r.height/V.k;
+  if(b.x0>=vx0&&b.y0>=vy0&&b.x1<=vx0+vw&&b.y1<=vy0+vh){mmShow(false);return}
+  mmShow(true);const W=190,H=130,pad=6;
+  const x0=Math.min(b.x0,vx0),y0=Math.min(b.y0,vy0),x1=Math.max(b.x1,vx0+vw),y1=Math.max(b.y1,vy0+vh);
+  const s=Math.min((W-pad*2)/(x1-x0),(H-pad*2)/(y1-y0));const ox=pad+((W-pad*2)-(x1-x0)*s)/2-x0*s,oy=pad+((H-pad*2)-(y1-y0)*s)/2-y0*s;mmMap={s,ox,oy};
+  const R=(x,y,w,h,c)=>`<rect class="${c}" x="${(ox+x*s).toFixed(1)}" y="${(oy+y*s).toFixed(1)}" width="${Math.max(1.5,w*s).toFixed(1)}" height="${Math.max(1.5,h*s).toFixed(1)}"/>`;
+  let h="";
+  if(viewing())h+=R(b.x0,b.y0,b.x1-b.x0,b.y1-b.y0,"mm-n");
+  else{M.nodes.forEach(n=>{if(isGroup(n)&&n.w)h+=R(n.x,n.y,n.w,n.h,"mm-g")});M.nodes.forEach(n=>{if(!isGroup(n)&&n.w)h+=R(n.x,n.y,n.w,n.h,"mm-n"+(S.sel&&S.sel.type==="node"&&S.sel.id===n.id?" on":""))})}
+  h+=`<rect class="mm-v" x="${(ox+vx0*s).toFixed(1)}" y="${(oy+vy0*s).toFixed(1)}" width="${(vw*s).toFixed(1)}" height="${(vh*s).toFixed(1)}"/>`;
+  mm.innerHTML=h}
+if(mm){const go=ev=>{if(!mmMap)return;const r=mm.getBoundingClientRect(),sr=svg.getBoundingClientRect();const wx=(ev.clientX-r.left-mmMap.ox)/mmMap.s,wy=(ev.clientY-r.top-mmMap.oy)/mmMap.s;V.tx=sr.width/2-wx*V.k;V.ty=sr.height/2-wy*V.k;applyView()};
+  mm.addEventListener("pointerdown",ev=>{ev.stopPropagation();ev.preventDefault();mmDrag=true;mm.setPointerCapture(ev.pointerId);go(ev)});
+  mm.addEventListener("pointermove",ev=>{if(mmDrag)go(ev)});mm.addEventListener("pointerup",()=>{mmDrag=false});mm.addEventListener("pointercancel",()=>{mmDrag=false})}
+function animateView(tx,ty,k){if(matchMedia("(prefers-reduced-motion: reduce)").matches){V.tx=tx;V.ty=ty;V.k=k;applyView();return}
+  const s0={tx:V.tx,ty:V.ty,k:V.k},t0=performance.now();cancelAnimationFrame(anim);
+  const step=t=>{const p=Math.min(1,(t-t0)/320),e=1-Math.pow(1-p,3);V.tx=s0.tx+(tx-s0.tx)*e;V.ty=s0.ty+(ty-s0.ty)*e;V.k=s0.k+(k-s0.k)*e;applyView();if(p<1)anim=requestAnimationFrame(step)};anim=requestAnimationFrame(step)}
+function frameWorld(x0,y0,x1,y1,maxK){const r=svg.getBoundingClientRect(),pad=70;
+  let k=Math.min(maxK||1.1,(r.width-pad*2)/Math.max(1,x1-x0),(r.height-pad*2)/Math.max(1,y1-y0));k=Math.max(0.35,k);
+  animateView(r.width/2-(x0+x1)/2*k,r.height/2-(y0+y1)/2*k,k)}
+function focusNodes(ns,edgeI){ns=ns.filter(Boolean);if(!ns.length)return;
+  if(M.kind==="seq")seqLayout();else{M.nodes.forEach(measure);layoutGroups()}
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;ns.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
+  if(M.kind==="seq"&&edgeI!==undefined&&M._seq.rows[edgeI]){const ry=M._seq.rows[edgeI].y;y0=Math.min(y0,ry-40);y1=Math.max(y1,ry+30)}
+  S.sel=edgeI!==undefined?{type:"edge",i:edgeI}:{type:"node",id:ns[0].id};draw();inspector();frameWorld(x0,y0,x1,y1)}
+function findBox(q){q=String(q||"").trim().toLowerCase();if(!q)return;
+  if(viewing()){const t=[...world.querySelectorAll("#mview text")].find(el=>labelOf(el).toLowerCase().includes(q));if(!t){toast(`Nothing called "${q}" on the diagram`);return}
+    const r=t.getBoundingClientRect(),sr=svg.getBoundingClientRect(),wx=x=>(x-sr.left-V.tx)/V.k,wy=y=>(y-sr.top-V.ty)/V.k;frameWorld(wx(r.left)-60,wy(r.top)-60,wx(r.right)+60,wy(r.bottom)+60,1.2);return}
+  const lab=n=>(nodeLabel(n)||"").toLowerCase();
+  const n=M.nodes.find(n=>lab(n)===q||n.key.toLowerCase()===q)||M.nodes.find(n=>lab(n).includes(q)||n.key.toLowerCase().includes(q));
+  if(!n){toast(`No box called "${q}"`);return}focusNodes([n])}
+function refreshFind(){const dl=$("find-list");if(!dl)return;dl.innerHTML=viewing()?"":M.nodes.slice(0,600).map(n=>`<option value="${esc(nodeLabel(n))}"></option>`).join("")}
+$("t-find").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();findBox(e.target.value)}if(e.key==="Escape"){e.target.value="";e.target.blur()}});
+$("t-find").addEventListener("input",e=>{if(!e.inputType||e.inputType==="insertReplacementText")findBox(e.target.value)});
+/* click a line in the Mermaid code to jump to what it describes */
+let codeFT=0;
+function focusFromCode(){
+  if(viewing()||!M.nodes.length)return;
+  const t=code.value,pos=code.selectionStart;const ls=t.lastIndexOf("\n",pos-1)+1,le0=t.indexOf("\n",pos),le=le0<0?t.length:le0;const line=t.slice(ls,le).trim();
+  if(!line||line.startsWith("%%"))return;
+  const has=(ws,n)=>ws.has(n.key)||(isGroup(n)&&ws.has(n.text));
+  const words=new Set(line.match(/[\w.\-]+/g)||[]);let hits=M.nodes.filter(n=>has(words,n));
+  if(!hits.length){const prev=t.slice(0,ls).split("\n");for(let i=prev.length-1;i>=0;i--){const l=prev[i].trim();if(l==="}"||l==="end")break;
+    if(/\{\s*$/.test(l)||/^subgraph\b/.test(l)){const ws=new Set(l.match(/[\w.\-]+/g)||[]);hits=M.nodes.filter(n=>has(ws,n));break}}}
+  if(!hits.length)return;
+  if(hits.length>=2){const ids=new Set(hits.map(h=>h.id));const cands=M.edges.map((e,i)=>[e,i]).filter(([e])=>e.a&&e.b&&ids.has(e.a)&&ids.has(e.b));
+    const best=cands.find(([e])=>e.label&&line.includes(e.label))||cands[0];if(best){focusNodes([byId(best[0].a),byId(best[0].b)],best[1]);return}}
+  focusNodes([hits[0]]);
+}
+/* full screen and side panel */
+function setFull(on){document.body.classList.toggle("fs",on);$("t-full").setAttribute("aria-pressed",on);$("t-full-l").textContent=on?"Exit full screen":"Full screen";
+  try{if(on){const el=document.documentElement;if(el.requestFullscreen&&!document.fullscreenElement){const p=el.requestFullscreen();if(p&&p.catch)p.catch(()=>{})}}
+    else if(document.fullscreenElement&&document.exitFullscreen){const p=document.exitFullscreen();if(p&&p.catch)p.catch(()=>{})}}catch(e){}
+  setTimeout(applyView,80)}
+$("t-full").onclick=()=>setFull(!document.body.classList.contains("fs"));
+document.addEventListener("fullscreenchange",()=>{if(!document.fullscreenElement&&document.body.classList.contains("fs"))setFull(false)});
+$("t-panel").onclick=()=>{const hide=!document.body.classList.contains("nopanel");document.body.classList.toggle("nopanel",hide);$("t-panel").setAttribute("aria-pressed",String(!hide));setTimeout(applyView,80)};
 /* ================= toolbar ================= */
 $("t-add").onclick=()=>addNode();
 $("t-connect").onclick=()=>setConnect(!S.connect);
@@ -1171,6 +1260,8 @@ $("t-zout").onclick=()=>{const r=svg.getBoundingClientRect();zoomAt(V.k/1.2,r.wi
 document.addEventListener("keydown",e=>{
   const t=e.target;if(t.matches&&t.matches("input,textarea,select"))return;
   if(!$("xmodal").hidden||!$("smodal").hidden||!$("hmodal").hidden)return;
+  if(e.key==="/"&&!e.ctrlKey&&!e.metaKey){e.preventDefault();$("t-find").focus();$("t-find").select();return}
+  if(e.key==="Escape"&&document.body.classList.contains("fs")&&!document.fullscreenElement&&!S.sel&&!S.connect&&!W.on){setFull(false);return}
   if(READONLY&&(e.ctrlKey||e.metaKey))return;
   if(READONLY&&!W.on){if(e.key==="Escape"&&S.sel){S.sel=null;draw();inspector()}return}
   if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="z"){e.preventDefault();undo();return}
@@ -1364,6 +1455,9 @@ function walkPanel(){
 
 /* ================= code tab, samples ================= */
 const code=$("code");let codeDirty=false;
+code.addEventListener("click",()=>{clearTimeout(codeFT);codeFT=setTimeout(focusFromCode,60)});
+code.addEventListener("keyup",e=>{if(/^(Arrow|Page)|^(Home|End)$/.test(e.key)){clearTimeout(codeFT);codeFT=setTimeout(focusFromCode,150)}});
+
 function syncCode(){if(!codeDirty)code.value=toMermaid()}
 let codeT=0,codeSnap=null;
 code.addEventListener("input",()=>{codeDirty=true;$("c-msg").textContent="";
@@ -1534,7 +1628,7 @@ async function boot(){
     $("save-status").textContent="";return}
   DOC_TITLE=title;$("doc-title").value=title;document.title=`${title} · Untangle`;
   let first=build(src,false);if(!first.model)first={model:{kind:"view",type:firstWord(src)||"unknown",src:src.trim(),dir:"TD",nodes:[],edges:[]}};
-  M=first.model;$("t-undo").disabled=true;kindUI();draw();syncCode();inspector();fit();
+  M=first.model;$("t-undo").disabled=true;kindUI();draw();syncCode();inspector();fit();refreshFind();
   if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>{if(!viewing())draw();fit()});
   if(MODE==="edit")setTimeout(async()=>{const thumb=await makeThumb();if(thumb)api(`/api/diagrams/${DOC.id}`,{method:"PUT",body:{thumb}}).catch(()=>{})},1500);
 }
