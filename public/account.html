@@ -5,9 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Account · Untangle</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/fonts.css">
 <link rel="stylesheet" href="/css/site.css">
 </head>
 <body>
@@ -31,6 +29,11 @@
       <p class="msg" id="pw-msg" role="status"></p>
       <div><button class="btn primary" type="submit">Change password</button></div>
     </form>
+    <div class="panel">
+      <h2>Your data</h2>
+      <p>Download every diagram in your account as one file, including the Mermaid code.</p>
+      <div><a class="btn" href="/api/export" download>Download all my diagrams</a></div>
+    </div>
     <form class="panel danger-zone" id="del-form">
       <h2>Delete account</h2>
       <p>This deletes your account, every diagram and every share link for good.</p>

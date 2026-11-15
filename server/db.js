@@ -45,6 +45,13 @@ export function openDb(file) {
       created_at  INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS versions_by_diagram ON versions(diagram_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS password_resets (
+      token_hash  TEXT PRIMARY KEY,
+      user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at  INTEGER NOT NULL,
+      expires_at  INTEGER NOT NULL
+    );
   `);
   return db;
 }

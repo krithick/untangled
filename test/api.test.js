@@ -4,8 +4,9 @@ import { openDb } from "../server/db.js";
 import { createApp, detectKind } from "../server/app.js";
 
 let server, base;
+const sent = []; // emails the app tried to send
 before(async () => {
-  const app = createApp({ db: openDb(":memory:") });
+  const app = createApp({ db: openDb(":memory:"), appUrl: "https://untangle.test", contactEmail: "help@untangle.test", mailer: { configured: true, send: async (m) => { sent.push(m); } } });
   await new Promise((r) => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -142,7 +143,7 @@ test("pages: logged-out users are sent to log in; public pages load", async () =
   let r = await anon("GET", "/app");
   assert.equal(r.status, 302);
   assert.match(r.headers.get("location"), /^\/login\?next=%2Fapp/);
-  for (const p of ["/", "/login", "/signup", "/demo", "/s/whatever", "/js/editor.js", "/vendor/mermaid.min.js"]) {
+  for (const p of ["/", "/login", "/signup", "/forgot", "/reset", "/privacy", "/terms", "/robots.txt", "/demo", "/s/whatever", "/js/editor.js", "/css/fonts.css", "/fonts/ibm-plex-sans-latin-400-normal.woff2", "/vendor/mermaid.min.js"]) {
     assert.equal((await anon("GET", p)).status, 200, p);
   }
   assert.equal((await anon("GET", "/nope")).status, 404);
@@ -150,4 +151,74 @@ test("pages: logged-out users are sent to log in; public pages load", async () =
   await user("POST", "/api/auth/signup", { name: "L", email: "l@example.com", password: "long enough pw" });
   r = await user("GET", "/login");
   assert.equal(r.status, 302, "logged-in users skip the login page");
+});
+
+test("password reset: emailed link works once, logs out other sessions, never reveals accounts", async () => {
+  const c = client(), other = client(), anon = client();
+  await c("POST", "/api/auth/signup", { name: "Nila", email: "nila@example.com", password: "first password" });
+  await other("POST", "/api/auth/login", { email: "nila@example.com", password: "first password" });
+  sent.length = 0;
+  let r = await anon("POST", "/api/auth/forgot", { email: "nobody@example.com" });
+  assert.equal(r.status, 200, "unknown emails get the same reply");
+  assert.equal(sent.length, 0);
+  r = await anon("POST", "/api/auth/forgot", { email: "NILA@example.com" });
+  assert.equal(r.status, 200);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "nila@example.com");
+  const link = sent[0].text.match(/https:\/\/untangle\.test\/reset\?token=([\w-]+)/);
+  assert.ok(link, "the email links to the configured site address");
+  assert.equal((await anon("POST", "/api/auth/reset", { token: "wrong", password: "second password" })).status, 400);
+  assert.equal((await anon("POST", "/api/auth/reset", { token: link[1], password: "short" })).status, 400);
+  r = await anon("POST", "/api/auth/reset", { token: link[1], password: "second password" });
+  assert.equal(r.status, 200);
+  assert.equal((await anon("GET", "/api/me")).body.user.email, "nila@example.com", "resetting logs you in");
+  assert.equal((await other("GET", "/api/me")).status, 401, "other sessions are logged out");
+  assert.equal((await client()("POST", "/api/auth/reset", { token: link[1], password: "third password" })).status, 400, "a link works once");
+  assert.equal((await client()("POST", "/api/auth/login", { email: "nila@example.com", password: "first password" })).status, 401);
+  assert.equal((await client()("POST", "/api/auth/login", { email: "nila@example.com", password: "second password" })).status, 200);
+  for (let i = 0; i < 5; i++) await anon("POST", "/api/auth/forgot", { email: "nila@example.com" });
+  assert.equal(sent.length, 3, "at most 3 reset emails per address per hour");
+});
+
+test("saving: a stale tab can't silently overwrite; previews alone don't count as edits", async () => {
+  const c = client();
+  await c("POST", "/api/auth/signup", { name: "Tabs", email: "tabs@example.com", password: "long enough pw" });
+  const d = (await c("POST", "/api/diagrams", { title: "Two tabs", source: FLOW })).body.diagram;
+  let r = await c("PUT", `/api/diagrams/${d.id}`, { thumb: "<svg xmlns='http://www.w3.org/2000/svg'></svg>", baseUpdatedAt: d.updatedAt });
+  assert.equal(r.body.diagram.updatedAt, d.updatedAt, "a new preview doesn't change the edit time");
+  await new Promise((res) => setTimeout(res, 5));
+  r = await c("PUT", `/api/diagrams/${d.id}`, { source: FLOW + "\n    b --> tabA", baseUpdatedAt: d.updatedAt });
+  assert.equal(r.status, 200);
+  const newer = r.body.diagram.updatedAt;
+  assert.notEqual(newer, d.updatedAt);
+  r = await c("PUT", `/api/diagrams/${d.id}`, { source: FLOW + "\n    b --> tabB", baseUpdatedAt: d.updatedAt });
+  assert.equal(r.status, 409, "the second tab is told about the conflict");
+  assert.equal(r.body.updatedAt, newer);
+  assert.match((await c("GET", `/api/diagrams/${d.id}`)).body.diagram.source, /tabA/);
+  r = await c("PUT", `/api/diagrams/${d.id}`, { source: FLOW + "\n    b --> tabB" });
+  assert.equal(r.status, 200, "saving without a base overwrites on purpose");
+  assert.match(r.body.diagram.source, /tabB/);
+});
+
+test("export, health check and security headers", async () => {
+  const c = client();
+  await c("POST", "/api/auth/signup", { name: "Exp", email: "exp@example.com", password: "long enough pw" });
+  await c("POST", "/api/diagrams", { title: "Mine", source: FLOW });
+  let r = await c("GET", "/api/export");
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-disposition"), /attachment; filename="untangle-export-/);
+  assert.equal(r.body.diagrams.length, 1);
+  assert.equal(r.body.diagrams[0].source, FLOW);
+  assert.equal((await client()("GET", "/api/export")).status, 401);
+  r = await client()("GET", "/healthz");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ok, true);
+  r = await client()("GET", "/");
+  const csp = r.headers.get("content-security-policy");
+  assert.match(csp, /default-src 'self'/);
+  assert.doesNotMatch(csp, /googleapis|gstatic/, "no third-party hosts");
+  assert.equal(r.headers.get("x-frame-options"), "DENY");
+  assert.equal(r.headers.get("x-robots-tag"), null, "the landing page can be indexed");
+  assert.match((await client()("GET", "/s/abc")).headers.get("x-robots-tag"), /noindex/);
+  assert.match((await client()("GET", "/privacy")).body, /help@untangle\.test/);
 });

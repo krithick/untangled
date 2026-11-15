@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Choose a new password · Untangle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/fonts.css">
+<link rel="stylesheet" href="/css/site.css">
+</head>
+<body class="auth">
+<div class="container"><nav class="nav"><a class="logo" href="/"><span class="logo-mark" aria-hidden="true"></span>Untangle</a></nav></div>
+<main>
+  <form class="auth-card" id="auth-form" data-mode="reset" novalidate>
+    <h1>Choose a new password</h1>
+    
+    <div class="field"><label for="password">New password</label><input class="in" id="password" name="password" type="password" autocomplete="new-password" required minlength="8"><small>At least 8 characters. You'll be logged out on other devices.</small></div>
+    <p class="msg" id="msg" role="alert"></p>
+    <button class="btn primary big" type="submit">Save password and log in</button>
+    <p class="alt"><a href="/forgot">Ask for a new link</a></p>
+  </form>
+</main>
+<script type="module" src="/js/auth.js"></script>
+</body>
+</html>

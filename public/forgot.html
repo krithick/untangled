@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forgot password · Untangle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/fonts.css">
+<link rel="stylesheet" href="/css/site.css">
+</head>
+<body class="auth">
+<div class="container"><nav class="nav"><a class="logo" href="/"><span class="logo-mark" aria-hidden="true"></span>Untangle</a></nav></div>
+<main>
+  <form class="auth-card" id="auth-form" data-mode="forgot" novalidate>
+    <h1>Forgot your password?</h1>
+    <p>Enter your account email and we'll send you a link to choose a new password.</p>
+    <div class="field"><label for="email">Email</label><input class="in" id="email" name="email" type="email" autocomplete="email" required></div>
+    <p class="msg" id="msg" role="alert"></p>
+    <button class="btn primary big" type="submit">Send reset link</button>
+    <p class="alt"><a href="/login">Back to log in</a></p>
+  </form>
+</main>
+<script type="module" src="/js/auth.js"></script>
+</body>
+</html>

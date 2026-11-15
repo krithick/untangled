@@ -1609,35 +1609,51 @@ async function doExport(kind){
 }
 
 /* ================= app glue: loading, saving, sharing, history ================= */
-let DOC=null,DOC_TITLE="Untitled diagram",lastSaved="",saveT=0,saving=false,again=false;
+let DOC=null,DOC_TITLE="Untitled diagram",lastSaved="",saveT=0,saving=false,again=false,conflict=false;
 async function api(path,opts={}){
-  const r=await fetch(path,{method:opts.method||"GET",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Requested-With":"untangle"},body:opts.body?JSON.stringify(opts.body):undefined});
+  const body=opts.body?JSON.stringify(opts.body):undefined;
+  const r=await fetch(path,{method:opts.method||"GET",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Requested-With":"untangle"},body,keepalive:!!opts.keepalive&&(!body||body.length<60000)});
   let data={};try{data=await r.json()}catch(e){}
-  if(r.status===401&&MODE==="edit"){location.href="/login?next="+encodeURIComponent(location.pathname);throw new Error("Please log in.")}
+  if(r.status===401&&MODE==="edit"&&!opts.stay){location.href="/login?next="+encodeURIComponent(location.pathname);throw new Error("Please log in.")}
   if(!r.ok){const err=new Error(data.error||"Something went wrong. Please try again.");err.status=r.status;throw err}
   return data;
 }
 function setStatus(text,cls){const el=$("save-status");el.textContent=text;el.className="save-status"+(cls?" "+cls:"")}
+function saveAlert(html){const el=$("save-alert");if(!html){el.hidden=true;el.innerHTML="";return}el.innerHTML=html;el.hidden=false}
 function appSave(){
   if(MODE==="share"||!M)return;
   if(MODE==="demo"){store("untangle-demo",toMermaid());return}
   if(!DOC)return;
-  clearTimeout(saveT);setStatus("Unsaved changes");saveT=setTimeout(()=>flush(false),900);
+  clearTimeout(saveT);if(conflict){setStatus("Not saved","err");return}
+  setStatus("Unsaved changes");saveT=setTimeout(()=>flush(false),900);
 }
 async function makeThumb(){try{const t=(await buildExport("light")).text;return t.length<380000?t:null}catch(e){return null}}
-async function flush(checkpoint){
+/* opts.force: overwrite a newer copy saved elsewhere. opts.unload: the tab is closing, so send at once without a preview. */
+async function flush(checkpoint,opts={}){
   if(MODE!=="edit"||!DOC)return;clearTimeout(saveT);
+  if(conflict&&!opts.force)return;
   if(saving){again=true;return}
   const src=toMermaid(),title=($("doc-title").value.trim()||"Untitled diagram").slice(0,120);
-  if(src===lastSaved&&title===DOC.title&&!checkpoint){setStatus("Saved","ok");return}
-  saving=true;setStatus("Saving…");
-  const thumb=await makeThumb();
-  try{const r=await api(`/api/diagrams/${DOC.id}`,{method:"PUT",body:{source:src,title,thumb,checkpoint:!!checkpoint}});
-    DOC=r.diagram;DOC_TITLE=DOC.title;document.title=`${DOC.title} · Untangle`;lastSaved=src;setStatus("All changes saved","ok")}
-  catch(e){setStatus(e.status===413?e.message:"Couldn't save. Retrying…","err");if(e.status!==413)saveT=setTimeout(()=>flush(false),5000)}
+  if(src===lastSaved&&title===DOC.title&&!checkpoint&&!opts.force){setStatus("All changes saved","ok");return}
+  saving=true;if(!opts.unload)setStatus("Saving…");
+  const thumb=opts.unload?null:await makeThumb();
+  const body={source:src,title,thumb,checkpoint:!!checkpoint};if(!opts.force)body.baseUpdatedAt=DOC.updatedAt;
+  try{const r=await api(`/api/diagrams/${DOC.id}`,{method:"PUT",body,stay:true,keepalive:!!opts.unload});
+    DOC=r.diagram;DOC_TITLE=DOC.title;document.title=`${DOC.title} · Untangle`;lastSaved=src;conflict=false;saveAlert("");setStatus("All changes saved","ok")}
+  catch(e){
+    if(e.status===409){conflict=true;setStatus("Not saved","err");
+      saveAlert(`<b>This diagram was changed in another tab or on another device.</b> Your changes here are not saved yet. <span class="alert-btns"><button class="btn" id="cf-latest">Load the latest version</button><button class="btn" id="cf-mine">Keep my version</button></span>`);
+      $("cf-latest").onclick=()=>{lastSaved=toMermaid();conflict=false;DOC=null;location.reload()};
+      $("cf-mine").onclick=()=>{saveAlert("");flush(true,{force:true})}}
+    else if(e.status===401){setStatus("Logged out","err");
+      saveAlert(`<b>You've been logged out.</b> Your changes are still here. <a href="/login" target="_blank" rel="noopener">Log in in a new tab</a>, then come back and they will save.`);saveT=setTimeout(()=>flush(false),5000)}
+    else if(e.status===413){setStatus(e.message,"err")}
+    else if(e.status===404){setStatus("Not saved","err");saveAlert(`<b>This diagram no longer exists.</b> It may have been deleted in another tab. Copy the Mermaid code from the code tab to keep your work.`)}
+    else{setStatus(e.status===429?"Saving paused for a moment…":"Couldn't save. Retrying…","err");saveT=setTimeout(()=>flush(false),e.status===429?20000:5000)}}
   finally{saving=false;if(again){again=false;flush(false)}}
 }
-window.addEventListener("beforeunload",e=>{if(MODE==="edit"&&DOC&&(toMermaid()!==lastSaved||saving)){flush(false);e.preventDefault();e.returnValue=""}});
+window.addEventListener("beforeunload",e=>{if(MODE==="edit"&&DOC&&(toMermaid()!==lastSaved||saving)){flush(false,{unload:true});e.preventDefault();e.returnValue=""}});
+window.addEventListener("online",()=>{if(MODE==="edit"&&DOC&&!conflict)flush(false)});
 
 /* ---- share dialog ---- */
 function shareUrl(){return DOC&&DOC.shareToken?`${location.origin}/s/${DOC.shareToken}`:""}

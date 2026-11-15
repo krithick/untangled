@@ -1,6 +1,6 @@
 {
   "name": "untangle",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Turn Mermaid diagrams into something you can move, edit, walk through and share.",
   "type": "module",
@@ -11,10 +11,14 @@
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
     "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "test:e2e": "node --disable-warning=ExperimentalWarning test/e2e/smoke.cjs",
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js"
   },
   "dependencies": {
+    "compression": "^1.7.5",
     "express": "^4.21.2",
-    "mermaid": "^11.4.1"
+    "mermaid": "^11.4.1",
+    "nodemailer": "^10.5.0"
   }
 }
