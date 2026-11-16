@@ -2,6 +2,8 @@
    Needs Playwright with Chromium: npm install --no-save playwright && npx playwright install chromium */
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const fs = require("node:fs");
+const os = require("node:os");
 const { pathToFileURL } = require("node:url");
 let chromium;
 try { ({ chromium } = require("playwright")); }
@@ -26,7 +28,7 @@ const ISLANDS = "erDiagram\n" + ["A", "B", "C", "D", "E", "F"].map((p) => `  ${p
   const watch = (p) => {
     p.on("pageerror", (e) => errors.push(`${p.url()}: ${e.message}`));
     p.on("console", (m) => { if (m.type() === "error" && !/status of (401|404|409)/.test(m.text())) errors.push(`${p.url()}: ${m.text()}`); });
-    p.on("request", (r) => { if (!r.url().startsWith(B) && !/^(data|blob):/.test(r.url())) foreign.push(r.url()); });
+    p.on("request", (r) => { if (!r.url().startsWith(B) && !r.url().startsWith(L) && !/^(data|blob):/.test(r.url())) foreign.push(r.url()); });
   };
   const page = await ctx.newPage(); watch(page);
   const api = (method, url, body) => page.evaluate(async ([m, u, b]) => {
@@ -35,6 +37,16 @@ const ISLANDS = "erDiagram\n" + ["A", "B", "C", "D", "E", "F"].map((p) => `  ${p
   }, [method, url, body]);
   const saved = (p = page) => p.waitForFunction(() => document.getElementById("save-status").textContent === "All changes saved", null, { timeout: 15000 });
   const email = `e2e${Date.now()}@example.com`;
+
+  /* local mode: a folder of .mmd files, as the `untangled` command serves it */
+  const { createLocalApp } = await import(pathToFileURL(path.join(root, "server/local.js")));
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "untangle-e2e-")));
+  fs.mkdirSync(path.join(repo, "docs"));
+  const HAND = "%% Team data model. Owner: platform team.\nerDiagram\n  %% identity\n  USERS ||--o{ ORDERS : places\n  ORDERS ||--|{ ORDER_ITEMS : contains\n";
+  const erd = path.join(repo, "docs/erd.mmd");
+  fs.writeFileSync(erd, HAND);
+  const localServer = await new Promise((r) => { const s = createLocalApp({ root: repo }).listen(0, "127.0.0.1", () => r(s)); });
+  const L = `http://localhost:${localServer.address().port}`;
   let flowId, shareLink;
 
   step("landing page loads and links to sign-up", async () => {
@@ -136,6 +148,48 @@ const ISLANDS = "erDiagram\n" + ["A", "B", "C", "D", "E", "F"].map((p) => `  ${p
       assert.ok(w <= 390, `${url} is ${w}px wide on a 390px screen`);
     }
   });
+  step("local mode: the folder's files are listed, and opening one doesn't change it", async () => {
+    await page.setViewportSize({ width: 1366, height: 860 });
+    await page.goto(L + "/"); await page.waitForSelector(".files a");
+    assert.match(await page.textContent(".files"), /docs\/erd\.mmd/);
+    const before = fs.statSync(erd).mtimeMs;
+    await page.click(".files a"); await page.waitForSelector(".node");
+    assert.equal(await page.locator(".node").count(), 3);
+    assert.match(await page.textContent("#info-alert"), /1 comment line inside the diagram/);
+    assert.equal(await page.getAttribute("#doc-title", "readonly"), "");
+    assert.equal(await page.isHidden("#b-share"), true);
+    await page.waitForTimeout(1500); await page.reload(); await page.waitForSelector(".node");
+    assert.equal(fs.readFileSync(erd, "utf8"), HAND);
+    assert.equal(fs.statSync(erd).mtimeMs, before, "the file was not rewritten");
+  });
+  step("local mode: an edit is written to the file, keeping the comment at the top", async () => {
+    const box = await page.locator('[data-hit^="title:"]').first().boundingBox();
+    await page.mouse.move(box.x + 20, box.y + 10); await page.mouse.down();
+    await page.mouse.move(box.x + 160, box.y + 60, { steps: 5 }); await page.mouse.up();
+    await page.waitForFunction(() => document.getElementById("save-status").textContent === "Saved to file", null, { timeout: 10000 });
+    const text = fs.readFileSync(erd, "utf8");
+    assert.ok(text.startsWith("%% Team data model. Owner: platform team.\nerDiagram\n"), "top comment kept");
+    assert.match(text, /USERS \|\|--o\{ ORDERS : places/);
+    assert.match(text, /%% layout: USERS /);
+    assert.ok(text.endsWith("\n") && !text.endsWith("\n\n"));
+  });
+  step("local mode: a change made on disk is not overwritten", async () => {
+    await page.waitForTimeout(30);
+    fs.writeFileSync(erd, "erDiagram\n  USERS ||--o{ INVOICES : pulled_from_git\n");
+    await page.click("#t-add"); await page.keyboard.type("PAYMENTS"); await page.keyboard.press("Enter");
+    await page.waitForSelector("#save-alert:not([hidden])");
+    assert.match(await page.textContent("#save-alert"), /changed on disk/);
+    assert.match(fs.readFileSync(erd, "utf8"), /pulled_from_git/);
+    await Promise.all([page.waitForEvent("load"), page.click("#cf-latest")]);
+    await page.waitForSelector(".node");
+    assert.match(await page.textContent("#world"), /INVOICES/);
+  });
+  step("local mode: a new diagram creates a file", async () => {
+    await page.goto(L + "/"); await page.click("#new-btn");
+    await page.fill("#new-name", "design/login-flow"); await page.click('[data-tpl="blank-flow"]');
+    await page.waitForURL("**/f/design/login-flow.mmd"); await page.waitForSelector(".node");
+    assert.match(fs.readFileSync(path.join(repo, "design/login-flow.mmd"), "utf8"), /^flowchart TD/);
+  });
   step("no script errors and no requests to other sites", async () => {
     assert.deepEqual(errors, []);
     assert.deepEqual([...new Set(foreign)], []);
@@ -147,7 +201,7 @@ const ISLANDS = "erDiagram\n" + ["A", "B", "C", "D", "E", "F"].map((p) => `  ${p
     try { await fn(); console.log(`ok   ${name} (${Date.now() - t0} ms)`); }
     catch (e) { failed++; console.log(`FAIL ${name}\n     ${String(e.message).split("\n")[0]}`); }
   }
-  await browser.close(); server.close();
+  await browser.close(); server.close(); localServer.close(); fs.rmSync(repo, { recursive: true, force: true });
   console.log(failed ? `\n${failed} of ${steps.length} steps failed` : `\nAll ${steps.length} steps passed`);
   process.exit(failed ? 1 : 0);
 })();

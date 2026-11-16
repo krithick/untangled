@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagrams in this folder · Untangle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/fonts.css">
+<link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+<div class="container">
+  <nav class="nav">
+    <a class="logo" href="/"><span class="logo-mark" aria-hidden="true"></span>Untangle</a>
+    <div class="nav-links"><span class="badge">Local files</span></div>
+  </nav>
+  <div class="dash-head">
+    <div><p class="eyebrow" id="count">Diagrams</p><h1 id="folder">This folder</h1><p class="path" id="root"></p></div>
+    <div class="dash-tools">
+      <input class="in" id="search" type="search" placeholder="Search by file name" aria-label="Search files">
+      <button class="btn primary" id="new-btn">New diagram</button>
+    </div>
+  </div>
+  <p class="msg" id="dash-msg" role="status"></p>
+  <ul class="files" id="files" aria-live="polite"></ul>
+  <div class="empty-state" id="empty" hidden>
+    <h2>No Mermaid files here yet</h2>
+    <p>Untangle looks for <code>.mmd</code> and <code>.mermaid</code> files in this folder and the folders inside it. Create one to start.</p>
+    <div class="row"><button class="btn primary" id="empty-new">New diagram</button></div>
+  </div>
+  <p class="msg" style="color:var(--muted);padding-bottom:40px">Changes are written straight to these files. Commit them with Git as usual.</p>
+</div>
+
+<div class="modal" id="new-modal" hidden role="dialog" aria-modal="true" aria-labelledby="new-h">
+  <form class="modal-card" id="new-form">
+    <h2 id="new-h">New diagram</h2>
+    <div class="field"><label for="new-name">File name</label><input class="in" id="new-name" value="docs/diagram.mmd" spellcheck="false" required><small>Relative to this folder. Folders are created if needed.</small></div>
+    <p class="eyebrow">Start from</p>
+    <div class="tpl-grid" id="tpls"></div>
+    <p class="msg" id="new-msg" role="alert"></p>
+    <div class="row"><button class="btn" type="button" id="new-close">Cancel</button></div>
+  </form>
+</div>
+<script src="/js/templates.js"></script>
+<script type="module" src="/js/local.js"></script>
+</body>
+</html>

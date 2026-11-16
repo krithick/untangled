@@ -157,6 +157,17 @@ footer.foot{border-top:1px solid var(--line);padding-block:24px 40px;color:var(-
 .tpl .k{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent)}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 
+/* local file list */
+.path{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:4px;word-break:break-all}
+.files{list-style:none;margin:0 0 16px;padding:0;background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.files li+li{border-top:1px solid var(--line)}
+.files a{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;padding:12px 16px;color:var(--ink);text-decoration:none}
+.files a:hover,.files a:focus-visible{background:var(--accent-soft)}
+.files .fname{font-family:var(--mono);font-size:13.5px;min-width:0;word-break:break-all}
+.files .fdir{color:var(--muted)}
+.files .fmeta{font-size:12.5px;color:var(--muted);white-space:nowrap}
+.files .none{padding:12px 16px;color:var(--muted)}
+
 /* legal */
 .legal{max-width:720px;padding-block:8px 48px;display:flex;flex-direction:column;gap:12px}
 .legal h1{font-size:40px}

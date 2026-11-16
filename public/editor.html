@@ -178,6 +178,7 @@ a.btn{text-decoration:none;display:inline-flex;align-items:center}
 body.readonly .stage-note{display:none}
 .alert{background:color-mix(in srgb,var(--danger) 10%,var(--panel));border:1px solid var(--danger);border-radius:10px;padding:10px 14px;font-size:13.5px;line-height:1.7}
 .alert a{color:var(--accent);font-weight:600}
+.alert.info{background:var(--accent-soft);border-color:var(--accent)}
 .alert-btns{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:6px;vertical-align:middle}
 .alert .btn{padding:4px 10px}
 @media (max-width:600px){
@@ -237,6 +238,7 @@ body.nopanel aside.side{display:none}
   </header>
   <div class="banner" id="demo-banner" hidden>You're trying Untangle without an account. Your changes stay in this browser only. <a href="/signup">Create a free account</a> to save diagrams and share links.</div>
   <div class="alert" id="save-alert" role="alert" hidden></div>
+  <div class="alert info" id="info-alert" role="status" hidden></div>
 
   <div class="toolbar" role="toolbar" aria-label="Diagram tools">
     <button class="tb" id="t-add" title="Add a box"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M12 9v6M9 12h6"/></svg><span id="t-add-l">Add table</span></button>

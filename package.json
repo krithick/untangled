@@ -2,7 +2,7 @@
   "name": "untangle",
   "version": "1.0.0",
   "private": true,
-  "description": "Turn Mermaid diagrams into something you can move, edit, walk through and share.",
+  "description": "Edit Mermaid diagrams by dragging: as a web app with accounts, or on the .mmd files of any Git repository.",
   "type": "module",
   "main": "server/index.js",
   "engines": {
@@ -13,12 +13,27 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch server/index.js",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
     "test:e2e": "node --disable-warning=ExperimentalWarning test/e2e/smoke.cjs",
-    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js"
+    "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js",
+    "local": "node --disable-warning=ExperimentalWarning bin/untangle.js"
   },
   "dependencies": {
     "compression": "^1.7.5",
     "express": "^4.21.2",
     "mermaid": "^11.4.1",
     "nodemailer": "^10.5.0"
+  },
+  "bin": {
+    "untangled": "bin/untangle.js"
+  },
+  "files": [
+    "bin",
+    "server",
+    "public",
+    "scripts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/krithick/untangled.git"
   }
 }

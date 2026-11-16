@@ -14,7 +14,26 @@ Untangle turns Mermaid diagrams into something you can move, edit, walk through 
 
 Layout, line bends and notes are stored as `%%` comments at the end of the Mermaid code. Mermaid ignores them, so the code still renders on GitHub, GitLab and Notion.
 
-## Run it locally
+## Use it on a Git repository (local mode)
+
+Run Untangle inside any repository and it edits that repository's `.mmd` and `.mermaid` files in place. There are no accounts and no database: the files are the storage and Git is the history. Because nothing depends on the Git host, it works the same with GitHub, Bitbucket, GitLab or no host at all.
+
+```bash
+npx github:krithick/untangled                 # every diagram in this folder and below
+```
+
+```bash
+npx github:krithick/untangled docs/erd.mmd    # one file (created if it doesn't exist)
+```
+
+It opens in your browser at `http://localhost:4747`. Options: `--port 5000`, `--no-open`.
+
+- Opening a file never changes it. The first edit saves it in Untangle's format: your layout goes into `%% layout:` comments at the end, comments above the diagram keyword are kept, and comments or styling lines inside the diagram are dropped (the editor warns you first).
+- If the file changes on disk while it's open (a `git pull`, another editor), Untangle asks before overwriting.
+- It only answers on `localhost`, and only reads and writes `.mmd`/`.mermaid` files inside the folder you started it in.
+- Needs Node.js 20 or newer.
+
+## Run the web app locally
 
 Needs Node.js 22.13 or newer. It uses Node's built-in SQLite, so there is no database to install.
 
@@ -87,6 +106,8 @@ server/
   auth.js    password hashing (scrypt), sessions, rate limiter
   mail.js    email through SMTP
   db.js      SQLite schema (users, sessions, diagrams, versions, password_resets)
+  local.js   local mode: the same editor API backed by files in a folder
+bin/untangle.js  the `untangled` command (local mode)
 public/
   index.html landing            app.html      dashboard
   login / signup / forgot / reset             account.html
@@ -95,13 +116,15 @@ public/
   js/templates.js starter diagrams
   fonts/         bundled fonts (no third-party requests)
 scripts/backup.js  database backup
-test/api.test.js   API tests        test/e2e/smoke.cjs   browser test
+test/api.test.js, test/local.test.js   API tests        test/e2e/smoke.cjs   browser test
 ```
 
 Security: passwords are hashed with scrypt; sessions are random tokens stored hashed, in HttpOnly SameSite=Lax cookies; every API write needs a custom header, which blocks cross-site requests; logins, sign-ups, password resets and the API as a whole are rate limited; reset links work once, expire in 1 hour and log out every other session; pages send a strict Content-Security-Policy with no third-party hosts; preview images are served sandboxed.
 
 ## Not built yet
 
+- A VS Code extension and a browser extension for GitHub and Bitbucket pages
+- Local mode for Mermaid blocks inside Markdown files (only `.mmd`/`.mermaid` files today)
 - Email verification at sign-up, and changing an account's email address
 - Real-time collaboration and comments; teams, billing and plans
 - Embeds for Notion, Confluence and GitHub READMEs

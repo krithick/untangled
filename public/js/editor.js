@@ -1,6 +1,10 @@
 (function(){
 "use strict";
-const MODE=/^\/s\//.test(location.pathname)?"share":/^\/demo/.test(location.pathname)?"demo":"edit";
+/* edit: a saved diagram in an account · local: a .mmd file on this computer · share: view only · demo: kept in this browser */
+const MODE=/^\/s\//.test(location.pathname)?"share":/^\/demo/.test(location.pathname)?"demo":/^\/f\//.test(location.pathname)?"local":"edit";
+const LOCAL=MODE==="local",SAVES=MODE==="edit"||LOCAL;
+const DOC_ID=LOCAL?encodeURIComponent(decodeURIComponent(location.pathname.slice(3))):location.pathname.split("/")[2];
+const SAVED_TEXT=LOCAL?"Saved to file":"All changes saved";
 const READONLY=MODE==="share";
 /* Samples live in /js/templates.js */
 const MERMAID_URL="/vendor/mermaid.min.js";
@@ -353,7 +357,19 @@ function newGroupAround(n){const cls=M.kind==="class",st=M.flavor==="state";let 
   mutate(()=>{M.nodes.push(g);n.g=g.id;S.sel={type:"node",id:g.id}})}
 const CLASS_RELS={inherit:["tri","",false,"Inheritance: B extends A"],realize:["tri","",true,"Realization: B implements A"],compose:["dia","",false,"Composition: A owns B"],aggregate:["odia","",false,"Aggregation: A has B"],assoc:["","arrow",false,"Association: A uses B"],depend:["","arrow",true,"Dependency: A depends on B"],link:["","",false,"Link"],dlink:["","",true,"Dashed link"]};
 
+/* Lines above the diagram keyword (front matter, comments) are kept as they are and written back on save. */
+function preambleOf(src){const L=String(src).replace(/\r\n/g,"\n").split("\n");let i=0;
+  if(L[0]&&L[0].trim()==="---"){const e=L.indexOf("---",1);if(e>0)i=e+1}
+  while(i<L.length&&(!L[i].trim()||L[i].trim().startsWith("%%")))i++;
+  return i>=L.length?"":L.slice(0,i).join("\n").replace(/\s+$/,"")}
+/* What a save would drop from a hand-written file: comments inside the diagram and styling lines. */
+function lossOf(src){const pre=preambleOf(src);const body=String(src).replace(/\r\n/g,"\n").slice(pre.length).split("\n");let comments=0,styles=0;
+  body.forEach(l=>{const t=l.trim();if(/^%%/.test(t)){if(!/^%%\s*(layout:|bend:|note:|lines:|Layout saved by Untangle|Notes saved by Untangle)/.test(t))comments++}
+    else if(/^(classDef|class\s+\S+\s+\S+$|style\s|linkStyle\s|click\s|cssClass\s)/.test(t))styles++});
+  return {comments,styles}}
 function build(src,keepPositions){
+  const r=buildModel(src,keepPositions);if(r.model&&r.model.kind!=="view")r.model.pre=preambleOf(src);return r}
+function buildModel(src,keepPositions){
   const kind=detectKind(src);if(!kind)return {model:null,errors:["This doesn't look like Mermaid. The first line should name the diagram type, for example flowchart TD or sequenceDiagram."]};
   if(kind==="view")return {model:{kind:"view",type:firstWord(src),src:src.trim(),dir:"TD",nodes:[],edges:[]},errors:[]};
   src=stripFront(src);
@@ -390,7 +406,8 @@ function layoutInto(model,all){
 
 const quote=s=>/^[\w-]+$/.test(s)?s:`"${String(s).replace(/"/g,"'")}"`;
 function flowText(n){const [o,c]=WRAP[n.shape]||WRAP.rect;const t=n.text||n.key;return o+(/[\[\]{}()|"<>]/.test(t)?`"${t.replace(/"/g,"#quot;")}"`:t)+c}
-function toMermaid(){
+function toMermaid(){const body=toMermaidBody();return M.kind!=="view"&&M.pre?M.pre+"\n"+body:body}
+function toMermaidBody(){
   if(M.kind==="view")return M.src;
   if(M.kind==="seq")return seqToMermaid();
   const L=[];
@@ -413,7 +430,7 @@ function toMermaid(){
   return L.join("\n");
 }
 
-const snapshot=()=>JSON.stringify({kind:M.kind,flavor:M.flavor,dir:M.dir,lineStyle:M.lineStyle,type:M.type,src:M.src,why:M.why,title:M.title,auto:M.auto,nodes:M.nodes.map(({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})=>({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})),edges:M.edges});
+const snapshot=()=>JSON.stringify({kind:M.kind,flavor:M.flavor,dir:M.dir,lineStyle:M.lineStyle,pre:M.pre,type:M.type,src:M.src,why:M.why,title:M.title,auto:M.auto,nodes:M.nodes.map(({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})=>({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})),edges:M.edges});
 function pushHistory(snap){if(snap&&snap!==snapshot()){history.push(snap);if(history.length>100)history.shift()}$("t-undo").disabled=!history.length}
 function mutate(fn){const s=snapshot();fn();pushHistory(s);changed()}
 function undo(){const s=history.pop();if(!s)return;const prevKind=M.kind;M=JSON.parse(s);if(S.sel&&!selExists())S.sel=null;if(W.on)walkStop();$("t-undo").disabled=!history.length;changed();if(prevKind!==M.kind){kindUI();fit()}}
@@ -1609,7 +1626,7 @@ async function doExport(kind){
 }
 
 /* ================= app glue: loading, saving, sharing, history ================= */
-let DOC=null,DOC_TITLE="Untitled diagram",lastSaved="",saveT=0,saving=false,again=false,conflict=false;
+let DOC=null,DOC_TITLE="Untitled diagram",lastSaved="",saveT=0,saving=false,again=false,conflict=false,dirty=false;
 async function api(path,opts={}){
   const body=opts.body?JSON.stringify(opts.body):undefined;
   const r=await fetch(path,{method:opts.method||"GET",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Requested-With":"untangle"},body,keepalive:!!opts.keepalive&&(!body||body.length<60000)});
@@ -1624,36 +1641,38 @@ function appSave(){
   if(MODE==="share"||!M)return;
   if(MODE==="demo"){store("untangle-demo",toMermaid());return}
   if(!DOC)return;
-  clearTimeout(saveT);if(conflict){setStatus("Not saved","err");return}
+  dirty=true;clearTimeout(saveT);if(conflict){setStatus("Not saved","err");return}
   setStatus("Unsaved changes");saveT=setTimeout(()=>flush(false),900);
 }
 async function makeThumb(){try{const t=(await buildExport("light")).text;return t.length<380000?t:null}catch(e){return null}}
 /* opts.force: overwrite a newer copy saved elsewhere. opts.unload: the tab is closing, so send at once without a preview. */
 async function flush(checkpoint,opts={}){
-  if(MODE!=="edit"||!DOC)return;clearTimeout(saveT);
+  if(!SAVES||!DOC)return;clearTimeout(saveT);
   if(conflict&&!opts.force)return;
   if(saving){again=true;return}
   const src=toMermaid(),title=($("doc-title").value.trim()||"Untitled diagram").slice(0,120);
-  if(src===lastSaved&&title===DOC.title&&!checkpoint&&!opts.force){setStatus("All changes saved","ok");return}
+  if(!dirty&&!checkpoint&&!opts.force){setStatus(SAVED_TEXT,"ok");return}
   saving=true;if(!opts.unload)setStatus("Saving…");
-  const thumb=opts.unload?null:await makeThumb();
+  const thumb=opts.unload||LOCAL?null:await makeThumb();
+  dirty=false; // edits made while this save is in flight set it again
   const body={source:src,title,thumb,checkpoint:!!checkpoint};if(!opts.force)body.baseUpdatedAt=DOC.updatedAt;
   try{const r=await api(`/api/diagrams/${DOC.id}`,{method:"PUT",body,stay:true,keepalive:!!opts.unload});
-    DOC=r.diagram;DOC_TITLE=DOC.title;document.title=`${DOC.title} · Untangle`;lastSaved=src;conflict=false;saveAlert("");setStatus("All changes saved","ok")}
+    DOC=r.diagram;DOC_TITLE=DOC.title;document.title=`${DOC.title} · Untangle`;lastSaved=src;conflict=false;saveAlert("");setStatus(SAVED_TEXT,"ok")}
   catch(e){
+    dirty=true;
     if(e.status===409){conflict=true;setStatus("Not saved","err");
-      saveAlert(`<b>This diagram was changed in another tab or on another device.</b> Your changes here are not saved yet. <span class="alert-btns"><button class="btn" id="cf-latest">Load the latest version</button><button class="btn" id="cf-mine">Keep my version</button></span>`);
-      $("cf-latest").onclick=()=>{lastSaved=toMermaid();conflict=false;DOC=null;location.reload()};
+      saveAlert(`<b>${LOCAL?"This file was changed on disk, for example by Git or another editor.":"This diagram was changed in another tab or on another device."}</b> Your changes here are not saved yet. <span class="alert-btns"><button class="btn" id="cf-latest">Load the latest version</button><button class="btn" id="cf-mine">Keep my version</button></span>`);
+      $("cf-latest").onclick=()=>{dirty=false;conflict=false;DOC=null;location.reload()};
       $("cf-mine").onclick=()=>{saveAlert("");flush(true,{force:true})}}
     else if(e.status===401){setStatus("Logged out","err");
       saveAlert(`<b>You've been logged out.</b> Your changes are still here. <a href="/login" target="_blank" rel="noopener">Log in in a new tab</a>, then come back and they will save.`);saveT=setTimeout(()=>flush(false),5000)}
     else if(e.status===413){setStatus(e.message,"err")}
-    else if(e.status===404){setStatus("Not saved","err");saveAlert(`<b>This diagram no longer exists.</b> It may have been deleted in another tab. Copy the Mermaid code from the code tab to keep your work.`)}
+    else if(e.status===404){setStatus("Not saved","err");saveAlert(`<b>This ${LOCAL?"file":"diagram"} no longer exists.</b> It may have been ${LOCAL?"moved or deleted":"deleted in another tab"}. Copy the Mermaid code from the code tab to keep your work.`)}
     else{setStatus(e.status===429?"Saving paused for a moment…":"Couldn't save. Retrying…","err");saveT=setTimeout(()=>flush(false),e.status===429?20000:5000)}}
   finally{saving=false;if(again){again=false;flush(false)}}
 }
-window.addEventListener("beforeunload",e=>{if(MODE==="edit"&&DOC&&(toMermaid()!==lastSaved||saving)){flush(false,{unload:true});e.preventDefault();e.returnValue=""}});
-window.addEventListener("online",()=>{if(MODE==="edit"&&DOC&&!conflict)flush(false)});
+window.addEventListener("beforeunload",e=>{if(SAVES&&DOC&&(dirty||saving)){flush(false,{unload:true});e.preventDefault();e.returnValue=""}});
+window.addEventListener("online",()=>{if(SAVES&&DOC&&dirty&&!conflict)flush(false)});
 
 /* ---- share dialog ---- */
 function shareUrl(){return DOC&&DOC.shareToken?`${location.origin}/s/${DOC.shareToken}`:""}
@@ -1683,25 +1702,30 @@ document.addEventListener("keydown",e=>{if(e.key==="Escape"){$("smodal").hidden=
 /* ---- boot ---- */
 async function boot(){
   document.body.classList.add("mode-"+MODE);if(READONLY)document.body.classList.add("readonly");
-  $("b-share").hidden=$("b-history").hidden=MODE!=="edit";$("doc-title").readOnly=MODE==="share";
+  $("b-share").hidden=$("b-history").hidden=MODE!=="edit";$("doc-title").readOnly=MODE==="share"||LOCAL;
   $("b-copy").hidden=MODE!=="share";$("b-signup").hidden=MODE!=="demo";$("demo-banner").hidden=MODE!=="demo";$("demo-tpl").hidden=MODE!=="demo";
   if(READONLY){$("c-apply").hidden=true;$("code").readOnly=true}
   $("logo").href=MODE==="edit"?"/app":"/";
+  if(LOCAL)document.querySelector("#b-signup").hidden=true;
   let src="",title="";
   try{
-    if(MODE==="edit"){const r=await api(`/api/diagrams/${location.pathname.split("/")[2]}`);DOC=r.diagram;src=DOC.source;title=DOC.title;lastSaved=src;setStatus("All changes saved","ok")}
+    if(SAVES){const r=await api(`/api/diagrams/${DOC_ID}`);DOC=r.diagram;src=DOC.source;title=DOC.title;lastSaved=src;setStatus(SAVED_TEXT,"ok")}
     else if(MODE==="share"){const r=await api(`/api/share/${location.pathname.split("/")[2]}`);src=r.diagram.source;title=r.diagram.title;$("owner").textContent=`Shared by ${r.diagram.owner}`}
     else{const T=window.UNTANGLE_TEMPLATES||[];const want=new URLSearchParams(location.search).get("t");const tpl=T.find(x=>x.id===want)||T[0];
       const saved=want?null:store("untangle-demo");src=saved&&detectKind(saved)?saved:tpl.source;title="Try Untangle";
       $("demo-tpl").innerHTML=`<option value="">Load a sample…</option>`+T.map(x=>`<option value="${x.id}">${esc(x.title)}</option>`).join("");
       $("demo-tpl").onchange=e=>{const x=T.find(y=>y.id===e.target.value);e.target.value="";if(x&&applySource(x.source,false))fit()}}
   }catch(e){
-    $("stage").innerHTML=`<div class="empty"><h2>${MODE==="share"?"This link doesn't work":"Couldn't open this diagram"}</h2><p>${esc(e.message)}</p><a class="btn primary" href="${MODE==="edit"?"/app":"/"}">${MODE==="edit"?"Back to my diagrams":"Go to Untangle"}</a></div>`;
+    $("stage").innerHTML=`<div class="empty"><h2>${MODE==="share"?"This link doesn't work":"Couldn't open this diagram"}</h2><p>${esc(e.message)}</p><a class="btn primary" href="${MODE==="edit"?"/app":"/"}">${MODE==="edit"?"Back to my diagrams":LOCAL?"Back to the file list":"Go to Untangle"}</a></div>`;
     $("save-status").textContent="";return}
   DOC_TITLE=title;$("doc-title").value=title;document.title=`${title} · Untangle`;
   let first=build(src,false);if(!first.model)first={model:{kind:"view",type:firstWord(src)||"unknown",src:src.trim(),dir:"TD",nodes:[],edges:[]}};
   M=first.model;$("t-undo").disabled=true;kindUI();draw();syncCode();inspector();fit();refreshFind();
   if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>{if(!viewing())draw();fit()});
+  if(LOCAL&&M.kind!=="view"){const loss=lossOf(src),parts=[];
+    if(loss.comments)parts.push(`${loss.comments} comment line${loss.comments>1?"s":""} inside the diagram`);
+    if(loss.styles)parts.push(`${loss.styles} styling line${loss.styles>1?"s":""}`);
+    if(parts.length){const el=$("info-alert");el.innerHTML=`<b>Before you edit:</b> saving rewrites this file in Untangle's own order and drops ${esc(parts.join(" and "))}. Comments above the diagram are kept. Nothing is written until you change something. <span class="alert-btns"><button class="btn" id="info-ok">Got it</button></span>`;el.hidden=false;$("info-ok").onclick=()=>{el.hidden=true}}}
   if(MODE==="edit")setTimeout(async()=>{const thumb=await makeThumb();if(thumb)api(`/api/diagrams/${DOC.id}`,{method:"PUT",body:{thumb}}).catch(()=>{})},1500);
 }
 $("doc-title").addEventListener("input",()=>appSave());
