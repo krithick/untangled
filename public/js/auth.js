@@ -1,3 +1,4 @@
+/* Shared by signup.html, login.html, forgot.html and reset.html. The form's data-mode attribute picks the API call. */
 import { api, safeNext } from "/js/api.js";
 const form = document.getElementById("auth-form");
 const msg = document.getElementById("msg");

@@ -1,3 +1,6 @@
+/* Entry point of the web app (npm start). Reads settings from environment variables, checks them,
+   opens the database, builds the app and listens. All behaviour lives in app.js; this file only wires it up.
+   Settings are documented in the README and in .env.example. */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "./db.js";

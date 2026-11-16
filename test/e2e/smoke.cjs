@@ -77,6 +77,25 @@ const ISLANDS = "erDiagram\n" + ["A", "B", "C", "D", "E", "F"].map((p) => `  ${p
       }
     }
   });
+  step("the less common Mermaid types draw too (catches breakage when Mermaid is upgraded)", async () => {
+    const OTHER = {
+      gitGraph: "gitGraph\n    commit\n    branch feature\n    checkout feature\n    commit\n    checkout main\n    merge feature",
+      xychart: "xychart-beta\n    title \"Orders per day\"\n    x-axis [Mon, Tue, Wed]\n    y-axis \"Orders\" 0 --> 100\n    bar [20, 35, 50]",
+      quadrant: "quadrantChart\n    title Features\n    x-axis Low effort --> High effort\n    y-axis Low value --> High value\n    Walkthrough: [0.3, 0.8]",
+      sankey: "sankey-beta\n\nVisitors,Signups,40\nVisitors,Left,60",
+      kanban: "kanban\n  Todo\n    [Write docs]\n  Doing\n    [Build editor]",
+      c4: "C4Context\n    title Delivery system\n    Person(customer, \"Customer\")\n    System(app, \"Delivery app\")\n    Rel(customer, app, \"Orders food\")",
+      block: "block-beta\n    columns 3\n    a[\"App\"] b[\"API\"] c[\"DB\"]",
+      requirement: "requirementDiagram\n    requirement fast {\n    id: 1\n    text: Load in 2 seconds\n    risk: low\n    verifymethod: test\n    }",
+    };
+    for (const [name, source] of Object.entries(OTHER)) {
+      const { diagram } = await api("POST", "/api/diagrams", { title: name, source });
+      await page.goto(`${B}/d/${diagram.id}`);
+      await page.waitForFunction(() => document.querySelector("#mview svg") || (document.getElementById("v-err") && !document.getElementById("v-err").hidden), null, { timeout: 20000 });
+      assert.equal(await page.locator("#mview svg").count(), 1, `${name}: ${await page.textContent("#v-err").catch(() => "not drawn")}`);
+      assert.ok(await page.locator(".orow").count() > 0, `${name}: the outline editor is empty`);
+    }
+  });
   step("dragging a box saves, and the layout survives a reload", async () => {
     flowId = (await api("POST", "/api/diagrams", { title: "Smoke flow", source: FLOW })).diagram.id;
     await page.goto(`${B}/d/${flowId}`); await page.waitForSelector(".node");

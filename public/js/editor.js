@@ -1,3 +1,59 @@
+/* Untangle editor
+   ===============
+   One script drives the editor page (public/editor.html) in four modes (see MODE below).
+   It is a single function with no build step and no framework: plain DOM and one <svg>.
+
+   HOW IT FITS TOGETHER
+     1. Mermaid text  --build()-->  model M  --renderInner()-->  SVG inside #world
+     2. The user drags or edits. Handlers change M inside mutate(), which records an undo step and
+        calls changed(): draw() + syncCode() + save() + inspector().
+     3. toMermaid() turns M back into Mermaid text. Layout is appended as "%% layout:" comments,
+        which Mermaid ignores.
+     Diagram types that can't be edited on the canvas (M.kind === "view") keep their text in M.src,
+     are drawn by the Mermaid library, and are edited through viewEditor() (tables and an outline).
+
+   THE MODEL (M)
+     M.kind       "flow" | "er" | "seq" | "class" | "view"
+     M.flavor     "state" when a flow model is really a state diagram, otherwise ""
+     M.dir        "TD" | "LR" | "BT" | "RL"
+     M.lineStyle  "elbow" | "curved" | "straight"
+     M.pre        comment and front-matter lines above the diagram keyword, written back unchanged
+     M.nodes[]    { id, key, text, shape, x, y, w, h, note, g, attrs[], members[], desc, stereo, generic }
+                    id     internal, unique per page load ("n12"); never saved
+                    key    the Mermaid identifier (table name, node id, participant alias)
+                    shape  flow:  rect | round | stadium | diamond | circle | sub | group
+                           state: state | start | end | choice | fork | join | group
+                           class: class | group          seq: participant | actor
+                    g      id of the group node it sits in (subgraph, composite state, namespace)
+                    w, h   computed by measure() on every draw; x, y are saved as "%% layout:" comments
+                    attrs  ER columns {type, name, keys[], comment};  members  class member lines
+     M.edges[]    { a, b, label, bend, ... } where a and b are node ids
+                    flow/state: style (solid | thick | dotted), arrow
+                    er:         ka, kb (one | zeroOne | oneMany | zeroMany), ident
+                    class:      ma, mb (tri | dia | odia | arrow | ""), dotted, la, lb (cardinality text)
+                    seq:        an ORDERED list of rows; t = msg | note | open | mid | close | act (see parseSeq)
+                    bend        {dx, dy}: offset of the line's handle from the straight midpoint, or null
+                    _pA, _sA... fields starting with "_" are computed for drawing and never saved
+     "view" kind: M.type (the Mermaid keyword), M.src (the text), M.why (why the canvas can't edit it)
+
+   OTHER STATE
+     V        viewport {tx, ty, k}
+     S        selection and tool state          W   walkthrough state
+     DOC      the saved document (edit and local modes)
+     history  undo snapshots (JSON strings of M)
+
+   HIT TESTING
+     Every clickable SVG element carries data-hit="kind:arg1:arg2":
+       node:<id>  title:<id>  attr:<id>:<i>  mem:<id>:<i>  rel:<edgeIndex>  label:<edgeIndex>
+       end:<edgeIndex>:a|b  bg
+     The one pointerdown handler in "pointer interaction" reads it and decides what to do.
+
+   SECTIONS (search for the "=====" banners)
+     constants & helpers, model (parsers, build, toMermaid, undo), geometry and routing, drawing,
+     layouts, pointer interaction, actions, walkthrough, sequence diagrams, Mermaid-drawn types,
+     big-diagram tools, toolbar, inspector, code tab, export, app glue (load, save, share, history, boot)
+
+   docs/EDITOR.md is a longer tour of this file. docs/HOW-TO.md has step-by-step recipes. */
 (function(){
 "use strict";
 /* edit: a saved diagram in an account · local: a .mmd file on this computer · share: view only · demo: kept in this browser */
@@ -30,7 +86,9 @@ const FT={title:`600 13px ${SYS}`,type:`400 11.5px ${MONO}`,name:`400 12.5px ${S
 let EXPORTING=false;
 /* text element; in exports, textLength pins each label to its measured width so it can't spill out of its box on another computer */
 function T(cls,x,y,s,font,anchor){const fit=EXPORTING&&s?` textLength="${tw(s,font).toFixed(1)}" lengthAdjust="spacingAndGlyphs"`:"";return `<text class="${cls}" x="${x}" y="${y}"${anchor?` text-anchor="${anchor}"`:""}${fit}>${esc(s)}</text>`}
+/* Width in px of string s in font FT[f], measured on an off-screen canvas. All box sizes come from this. */
 function tw(s,f){cv.font=FT[f];return cv.measureText(s).width}
+/* localStorage: store(key) reads, store(key, value) writes. Never throws (private windows, blocked storage). */
 function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
 let toastT=0;function toast(msg){const t=$("toast");t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true},2600)}
 
@@ -88,6 +146,7 @@ const SVG_CSS=`
 .card-t{font:500 11px ${SYS};fill:var(--muted);pointer-events:none}
 .cls-st{font:italic 400 11px ${SYS};fill:var(--muted);pointer-events:none}
 `;
+/* Styles that only matter while editing: cursors, selection, Focus dimming, walkthrough. Not exported. */
 const LIVE_CSS=`
 .ent-head,.ent-box,.row-hit,.fn-shape{cursor:move}
 .row-hit:hover{fill:var(--accent-soft)}
@@ -127,11 +186,18 @@ const LIVE_CSS=`
 const st=document.createElement("style");st.textContent=SVG_CSS+LIVE_CSS;document.head.appendChild(st);
 
 /* ================= model ================= */
+/* The diagram being edited. Its shape is described in the header of this file. */
 let M={kind:"er",dir:"TD",nodes:[],edges:[]};
 let seq=0;const nid=()=>"n"+(++seq);
+/* Viewport. World coordinates map to the screen as translate(tx, ty) scale(k). */
 const V={tx:0,ty:0,k:1};
+/* Tool and selection state. sel = {type:"node", id} | {type:"edge", i} | null. src = first box picked by Connect.
+   focusId = the node Focus is locked on. mview = showing Mermaid's own drawing of an editable diagram. */
 const S={sel:null,connect:false,src:null,snap:true,focus:false,focusId:null};
+/* Walkthrough state. Flowcharts and state diagrams: trail = visited node ids, etrail = edge indexes taken.
+   Sequence diagrams: si = index of the current row in M.edges. */
 const W={on:false,trail:[],etrail:[]};
+/* Undo stack of snapshot() strings, newest last, at most 100. */
 let history=[];
 const byId=id=>M.nodes.find(n=>n.id===id);
 const byKey=k=>M.nodes.find(n=>n.key===k);
@@ -139,15 +205,21 @@ const isGroup=n=>!!n&&n.shape==="group";
 const nodeLabel=n=>!n?"":M.kind==="er"||M.kind==="class"?(isGroup(n)?n.text||n.key:n.key):n.shape==="start"?"Start":n.shape==="end"?"End":(n.text||n.key);
 
 const stripFront=src=>src.replace(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/,"");
+/* First meaningful word of the source, which is the Mermaid diagram keyword. */
 function firstWord(src){for(const raw of stripFront(src).split(/\r?\n/)){const t=raw.trim();if(!t||t.startsWith("%%"))continue;return t.split(/\s+/)[0]}return ""}
+/* Which editor handles this source: "er" | "flow" | "seq" | "state" | "class", "view" for every other Mermaid
+   type, or null if the text doesn't start with a diagram keyword. */
 function detectKind(src){const w=firstWord(src);if(!w)return null;if(w==="erDiagram")return "er";if(w==="flowchart"||w==="graph")return "flow";if(w==="sequenceDiagram")return "seq";if(w==="stateDiagram"||w==="stateDiagram-v2")return "state";if(w==="classDiagram"||w==="classDiagram-v2")return "class";return /^[A-Za-z][\w-]*$/.test(w)?"view":null}
 const typeName=w=>w==="seq"?"Sequence diagram":TYPE_NAMES[w]||(w==="erDiagram"?"ER diagram":w==="flowchart"||w==="graph"?"Flowchart":w);
+/* Reads Untangle's own trailing comments into meta:
+   %% layout: KEY X Y   %% bend: KEY_A KEY_B DX DY   %% note: KEY text   %% lines: elbow|curved|straight */
 function parseMeta(t,meta){
   let m=t.match(/^%%\s*layout:\s*(\S+)\s+(-?[\d.]+)\s+(-?[\d.]+)/);if(m){meta.layout[m[1]]={x:+m[2],y:+m[3]};return}
   m=t.match(/^%%\s*bend:\s*(\S+)\s+(\S+)\s+(-?[\d.]+)\s+(-?[\d.]+)/);if(m){meta.bends.push({a:m[1],b:m[2],dx:+m[3],dy:+m[4]});return}
   m=t.match(/^%%\s*lines:\s*(elbow|curved|straight)/);if(m){meta.lines=m[1];return}
   m=t.match(/^%%\s*note:\s*(\S+)\s+(.*)$/);if(m)meta.notes[m[1]]=m[2].replace(/\\n/g,"\n");
 }
+/* erDiagram text → {nodes, edges, meta, errors}. errors lists the line numbers it couldn't read. */
 function parseER(src){
   const nodes=new Map(),edges=[],errors=[],meta={layout:{},bends:[],notes:{}};let cur=null;
   const ensure=k=>{if(!nodes.has(k))nodes.set(k,{key:k,attrs:[]});return nodes.get(k)};
@@ -171,6 +243,8 @@ const NODE_RE=/^\s*([A-Za-z0-9_]+)(?:\s*(\[\[([^\]]*)\]\]|\(\[([^\]]*)\]\)|\(\((
 const LINK_RE=/^\s*(-->|---|==>|===|-\.->|-\.-)\s*(?:\|([^|]*)\|)?/;
 const LINK_T_RE=/^\s*(--|==|-\.)\s+(.+?)\s+(-->|---|==>|===|\.->|\.-)/;
 const cleanText=s=>{s=s.trim();if(/^".*"$/.test(s))s=s.slice(1,-1);return s.replace(/#quot;/g,'"')};
+/* flowchart / graph text → nodes and edges. Handles chains (a --> b --> c), six node shapes, three line
+   styles, edge labels and subgraphs (as group nodes). Styling lines (classDef, style, click) are skipped. */
 function parseFlow(src){
   const nodes=new Map(),edges=[],errors=[],meta={layout:{},bends:[],notes:{}};let dir="TD";const gstack=[];
   const def=m=>{const k=m[1];if(!nodes.has(k))nodes.set(k,{key:k,text:k,shape:"rect"});const n=nodes.get(k);
@@ -204,6 +278,8 @@ function parseFlow(src){
 }
 
 /* ---- state diagrams (drawn with the flowchart engine, flavor "state") ---- */
+/* stateDiagram text → the flow model with flavor "state". Each [*] becomes a start or end node for its scope.
+   Returns `unsupported` for concurrency regions (--), which sends the file to the outline editor instead. */
 function parseState(src){
   const nodes=new Map(),edges=[],errors=[],meta={layout:{},bends:[],notes:{}};let dir="TD",unsupported=null,inNote=null;const gstack=[];
   const cur=()=>gstack.length?gstack[gstack.length-1]:null;
@@ -234,6 +310,7 @@ function parseState(src){
   });
   return {kind:"flow",flavor:"state",dir,nodes:[...nodes.values()],edges,meta,errors,unsupported};
 }
+/* State model → Mermaid lines. A transition is written inside the innermost composite state that contains both ends. */
 function stateBody(L){
   L.push("stateDiagram-v2");if(M.dir&&M.dir!=="TD")L.push(`    direction ${M.dir}`);
   const ref=n=>n.shape==="start"||n.shape==="end"?"[*]":n.key;
@@ -255,6 +332,8 @@ function stateBody(L){
 /* ---- class diagrams ---- */
 const CLASS_TOK={"<|--":["tri","",false],"<|..":["tri","",true],"--|>":["","tri",false],"..|>":["","tri",true],"*--":["dia","",false],"o--":["odia","",false],"--*":["","dia",false],"--o":["","odia",false],"<--":["arrow","",false],"<..":["arrow","",true],"-->":["","arrow",false],"..>":["","arrow",true],"--":["","",false],"..":["","",true]};
 const CLASS_REL=/^([\w-]+(?:~[^~]+~)?)\s*(?:"([^"]*)"\s*)?(<\|--|<\|\.\.|--\|>|\.\.\|>|\*--|o--|--\*|--o|<--|<\.\.|-->|\.\.>|--|\.\.)\s*(?:"([^"]*)"\s*)?([\w-]+(?:~[^~]+~)?)\s*(?::\s*(.*))?$/;
+/* classDiagram text → class nodes (members, stereotype, generic type) and relationships (end markers and
+   cardinalities). CLASS_TOK maps each arrow token to [marker at A, marker at B, dotted]. */
 function parseClass(src){
   const nodes=new Map(),edges=[],errors=[],meta={layout:{},bends:[],notes:{}};let dir="TD",body=null;const ns=[];
   const ensure=raw=>{let k=raw,gen="";const m=raw.match(/^([\w-]+)~(.+)~$/);if(m){k=m[1];gen=m[2]}
@@ -285,6 +364,7 @@ function parseClass(src){
   return {kind:"class",dir,nodes:[...nodes.values()],edges,meta,errors};
 }
 const MARK_L={tri:"<|",dia:"*",odia:"o",arrow:"<","":""},MARK_R={tri:"|>",dia:"*",odia:"o",arrow:">","":""};
+/* Class model → Mermaid lines. */
 function classBody(L){
   L.push("classDiagram");if(M.dir&&M.dir!=="TD")L.push(`    direction ${M.dir}`);
   const decl=(n,ind)=>{const name=n.key+(n.generic?`~${n.generic}~`:"");
@@ -298,6 +378,7 @@ function classBody(L){
     L.push(`    ${A.key}${e.la?` "${e.la}"`:""} ${MARK_L[e.ma||""]}${e.dotted?"..":"--"}${MARK_R[e.mb||""]}${e.lb?` "${e.lb}"`:""} ${B.key}${e.label?` : ${e.label}`:""}`)});
   M.nodes.forEach(n=>{if(!isGroup(n)&&n.note&&n.note.trim())L.push(`    note for ${n.key} "${n.note.trim().replace(/"/g,"'").replace(/\n/g,"\\n")}"`)});
 }
+/* Flowchart model → Mermaid lines (subgraphs first, then edges). */
 function flowBody(L){
   L.push(`flowchart ${M.dir}`);
   const emit=(gid,ind)=>M.nodes.filter(n=>parentOf(n)===gid).forEach(n=>{
@@ -307,21 +388,26 @@ function flowBody(L){
   M.edges.forEach(e=>{const op=OPS[e.style||"solid"][e.arrow?0:1];const lab=e.label?`|${e.label.replace(/\|/g,"/")}|`:"";L.push(`    ${byId(e.a).key} ${op}${lab} ${byId(e.b).key}`)});
 }
 /* ---- groups: subgraphs, composite states, namespaces (nodes with shape "group") ---- */
+/* Group helpers. A group is a node with shape "group"; its children point at it through n.g.
+   A group's box is never stored: layoutGroups() recomputes it from the children on every draw. */
 function parentOf(n){return n&&n.g&&n.g!==n.id&&byId(n.g)?n.g:null}
 function depthOf(n){let d=0,p=parentOf(n);const seen=new Set();while(p&&!seen.has(p)){seen.add(p);d++;p=parentOf(byId(p))}return d}
 function descendants(id){const out=[],seen=new Set([id]);const walk=gid=>M.nodes.forEach(n=>{if(n.g===gid&&!seen.has(n.id)){seen.add(n.id);out.push(n);if(isGroup(n))walk(n.id)}});walk(id);return out}
+/* Sets x, y, w, h of every group to wrap its children, innermost groups first. */
 function layoutGroups(){const gs=M.nodes.filter(isGroup);if(!gs.length)return;gs.sort((a,b)=>depthOf(b)-depthOf(a));
   gs.forEach(g=>{let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
     M.nodes.forEach(n=>{if(n.g===g.id&&n!==g&&!isNaN(n.x)&&n.w){x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)}});
     const minW=tw(g.text||g.key,"title")+44;
     if(x0>x1){if(isNaN(g.x)||g.x===undefined){g.x=40;g.y=40}g.w=Math.max(180,minW);g.h=80;return}
     const pad=20,head=30;g.x=x0-pad;g.y=y0-pad-head;g.w=Math.max(x1-x0+pad*2,minW);g.h=y1-y0+pad*2+head})}
+/* SVG for the group boxes, drawn underneath everything else. */
 function groupBoxes(plain,L){
   return M.nodes.filter(isGroup).sort((a,b)=>depthOf(a)-depthOf(b)).map(n=>{let cls="node grp";
     if(!plain){if(S.sel&&S.sel.type==="node"&&S.sel.id===n.id)cls+=" sel";if(S.src===n.id)cls+=" src";
       if(L){if(L.mode==="walk"){cls+=n.id===L.cur?" cur visited":L.next.has(n.id)?" next":""}else if(L.nodes&&!L.nodes.has(n.id))cls+=" dim"}}
     const noteDot=n.note&&n.note.trim()?`<circle class="note-dot" cx="${n.w-9}" cy="10" r="4"/>`:"";
     return `<g class="${cls}" transform="translate(${n.x},${n.y})"><rect class="grp-box" width="${n.w}" height="${n.h}" rx="12"/><path class="grp-head" data-hit="title:${n.id}" d="M0 12a12 12 0 0 1 12-12H${n.w-12}a12 12 0 0 1 12 12V30H0Z"/>${T("grp-t",12,20,n.text||n.key,"title")}${noteDot}</g>`}).join("")}
+/* SVG for one state-diagram node (state, start, end, choice, fork, join). */
 function stateShape(n){const w=n.w,h=n.h,hit=`data-hit="node:${n.id}"`;
   if(n.shape==="start")return `<circle class="st-dot" ${hit} cx="${w/2}" cy="${h/2}" r="${w/2}"/>`;
   if(n.shape==="end")return `<circle class="st-ring" ${hit} cx="${w/2}" cy="${h/2}" r="${w/2-1}"/><circle class="st-dot" cx="${w/2}" cy="${h/2}" r="${w/2-6}" style="pointer-events:none"/>`;
@@ -331,6 +417,7 @@ function stateShape(n){const w=n.w,h=n.h,hit=`data-hit="node:${n.id}"`;
   n.lines.forEach((l,i)=>{s+=T("fn-text",w/2,24+i*LH,l,"node","middle")});
   if(n.dlines&&n.dlines.length){const y=n.lines.length*LH+16;s+=`<line class="ent-rule" x1="0" x2="${w}" y1="${y}" y2="${y}"/>`;n.dlines.forEach((l,i)=>{s+=T("st-desc",w/2,y+17+i*15,l,"lbl","middle")})}
   return s}
+/* SVG for one class box: name, attributes, methods (members containing "(" count as methods). */
 function classNode(n,cls,noteDot){const w=n.w;
   let s=`<rect class="ent-box" data-hit="node:${n.id}" width="${w}" height="${n.h}" rx="6"/><path class="ent-head" data-hit="title:${n.id}" d="M0 6a6 6 0 0 1 6-6H${w-6}a6 6 0 0 1 6 6V${n._head}H0Z"/>`;
   if(n.stereo)s+=T("cls-st",w/2,17,`«${n.stereo}»`,"lbl","middle");
@@ -367,8 +454,12 @@ function lossOf(src){const pre=preambleOf(src);const body=String(src).replace(/\
   body.forEach(l=>{const t=l.trim();if(/^%%/.test(t)){if(!/^%%\s*(layout:|bend:|note:|lines:|Layout saved by Untangle|Notes saved by Untangle)/.test(t))comments++}
     else if(/^(classDef|class\s+\S+\s+\S+$|style\s|linkStyle\s|click\s|cssClass\s)/.test(t))styles++});
   return {comments,styles}}
+/* Mermaid text → {model, errors}. keepPositions reuses the positions of nodes with the same key from the
+   current model; "Apply code" uses it so editing the code doesn't reshuffle the canvas. */
 function build(src,keepPositions){
   const r=buildModel(src,keepPositions);if(r.model&&r.model.kind!=="view")r.model.pre=preambleOf(src);return r}
+/* Does the work for build(): parse, create nodes with fresh ids, restore saved positions, bends and notes,
+   then run an automatic layout for anything that has no saved position. */
 function buildModel(src,keepPositions){
   const kind=detectKind(src);if(!kind)return {model:null,errors:["This doesn't look like Mermaid. The first line should name the diagram type, for example flowchart TD or sequenceDiagram."]};
   if(kind==="view")return {model:{kind:"view",type:firstWord(src),src:src.trim(),dir:"TD",nodes:[],edges:[]},errors:[]};
@@ -396,6 +487,7 @@ function buildModel(src,keepPositions){
   }
   return {model,errors:P.errors};
 }
+/* Runs an automatic layout on a model that isn't the current one, by swapping M for the duration. */
 function layoutInto(model,all){
   const keep=M;M=model;M.nodes.forEach(measure);
   if(all)layered();
@@ -406,7 +498,9 @@ function layoutInto(model,all){
 
 const quote=s=>/^[\w-]+$/.test(s)?s:`"${String(s).replace(/"/g,"'")}"`;
 function flowText(n){const [o,c]=WRAP[n.shape]||WRAP.rect;const t=n.text||n.key;return o+(/[\[\]{}()|"<>]/.test(t)?`"${t.replace(/"/g,"#quot;")}"`:t)+c}
+/* The model as Mermaid text, preamble first. This is what is saved, exported and shown in the code tab. */
 function toMermaid(){const body=toMermaidBody();return M.kind!=="view"&&M.pre?M.pre+"\n"+body:body}
+/* Everything below the preamble: the diagram, then the %% layout / bend / note comments. */
 function toMermaidBody(){
   if(M.kind==="view")return M.src;
   if(M.kind==="seq")return seqToMermaid();
@@ -430,12 +524,18 @@ function toMermaidBody(){
   return L.join("\n");
 }
 
+/* Serialises M for undo. Add any NEW model field here, or undo will silently lose it. */
 const snapshot=()=>JSON.stringify({kind:M.kind,flavor:M.flavor,dir:M.dir,lineStyle:M.lineStyle,pre:M.pre,type:M.type,src:M.src,why:M.why,title:M.title,auto:M.auto,nodes:M.nodes.map(({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})=>({id,key,text,shape,attrs,note,x,y,g,desc,members,stereo,generic})),edges:M.edges});
+/* Records an undo step if the model really changed since `snap`. */
 function pushHistory(snap){if(snap&&snap!==snapshot()){history.push(snap);if(history.length>100)history.shift()}$("t-undo").disabled=!history.length}
+/* Wrap every model change in mutate(): it records an undo step, then redraws, updates the code tab,
+   schedules a save and rebuilds the inspector (via changed()). */
 function mutate(fn){const s=snapshot();fn();pushHistory(s);changed()}
 function undo(){const s=history.pop();if(!s)return;const prevKind=M.kind;M=JSON.parse(s);if(S.sel&&!selExists())S.sel=null;if(W.on)walkStop();$("t-undo").disabled=!history.length;changed();if(prevKind!==M.kind){kindUI();fit()}}
 function selExists(){return S.sel.type==="node"?!!byId(S.sel.id):!!M.edges[S.sel.i]}
+/* Call after M has changed. mutate() does it for you. */
 function changed(){draw();syncCode();save();inspector();refreshFind()}
+/* Hands over to appSave() in the app-glue section, which decides where the diagram is stored. */
 function save(){appSave()}
 function uniqueKey(base,except){let n=base,i=2;while(M.nodes.some(e=>e.key===n&&e.id!==except))n=`${base}_${i++}`;return n}
 const cleanName=s=>s.trim().replace(/\s+/g,"_").replace(/[^\w-]/g,"").toUpperCase();
@@ -443,6 +543,7 @@ const cleanName=s=>s.trim().replace(/\s+/g,"_").replace(/[^\w-]/g,"").toUpperCas
 /* ================= geometry ================= */
 function wrapText(s,max){const words=String(s||" ").split(/\s+/);const out=[];let line="";
   words.forEach(w=>{const t=line?line+" "+w:w;if(tw(t,"node")>max&&line){out.push(line);line=w}else line=t});out.push(line);return out}
+/* Sets n.w and n.h (and wrapped text lines) from the node's content. Runs for every node before each draw. */
 function measure(n){
   if(isGroup(n))return;
   if(M.kind==="class"){const at=n.members.filter(m=>!m.includes("(")),me=n.members.filter(m=>m.includes("("));
@@ -468,6 +569,7 @@ function measure(n){
   n.w=Math.ceil(n.w);n.h=Math.ceil(n.h);
 }
 const ctr=n=>({x:n.x+n.w/2,y:n.y+n.h/2});
+/* The point where a line from the node's centre toward `toward` crosses its outline (box, diamond or ellipse). */
 function border(n,toward){
   const c=ctr(n);let dx=toward.x-c.x,dy=toward.y-c.y;if(!dx&&!dy)dy=1;
   const hw=n.w/2,hh=n.h/2;let t;
@@ -477,10 +579,13 @@ function border(n,toward){
   return {x:c.x+dx*t,y:c.y+dy*t};
 }
 const unit=(a,b)=>{const dx=b.x-a.x,dy=b.y-a.y,l=Math.hypot(dx,dy)||1;return {x:dx/l,y:dy/l}};
+/* Straight-line midpoint between an edge's two nodes. A bend is stored as an offset from this point. */
 function relMid(r){const A=byId(r.a),B=byId(r.b);if(A===B)return {x:A.x+A.w+46,y:A.y-34};const a=ctr(A),b=ctr(B);return {x:(a.x+b.x)/2,y:(a.y+b.y)/2}}
 /* ---- connection routing: spread ports along box sides, then draw elbow, curved or straight lines ---- */
 const SIDEV={top:{x:0,y:-1},bottom:{x:0,y:1},left:{x:-1,y:0},right:{x:1,y:0}};
 const POINTY=["diamond","circle","choice","start","end","fork","join"];
+/* Gives every un-bent edge its own start and end point, spread along the facing sides of the two boxes, and
+   staggers elbow segments that would overlap. Results: r._pA, r._pB (points), r._sA, r._sB (sides), r._off. */
 function assignPorts(){
   const horizPref=(M.kind==="flow"||M.kind==="class")&&(M.dir==="LR"||M.dir==="RL");
   const slots=new Map(),put=(n,side,item)=>{const k=n.id+"|"+side;if(!slots.has(k))slots.set(k,{n,side,items:[]});slots.get(k).items.push(item)};
@@ -502,10 +607,12 @@ function assignPorts(){
     const k=(v?"v":"h")+Math.round(mid/40);if(!bands.has(k))bands.set(k,[]);bands.get(k).push({r,c:v?(r._pA.x+r._pB.x)/2:(r._pA.y+r._pB.y)/2})});
   bands.forEach(list=>{list.sort((p,q)=>p.c-q.c);const m=list.length;list.forEach((it,k)=>{it.r._off=m>1?Math.max(-36,Math.min(36,(k-(m-1)/2)*9)):0})});
 }
+/* SVG path through points with rounded corners. */
 function roundPath(pts,rad){let d=`M${pts[0].x} ${pts[0].y}`;
   for(let i=1;i<pts.length-1;i++){const p=pts[i-1],c=pts[i],n=pts[i+1];const l1=Math.hypot(c.x-p.x,c.y-p.y),l2=Math.hypot(n.x-c.x,n.y-c.y);const r=Math.min(rad,l1/2,l2/2);
     if(r<1){d+=`L${c.x} ${c.y}`;continue}const a={x:c.x-(c.x-p.x)/l1*r,y:c.y-(c.y-p.y)/l1*r},b={x:c.x+(n.x-c.x)/l2*r,y:c.y+(n.y-c.y)/l2*r};d+=`L${a.x} ${a.y}Q${c.x} ${c.y} ${b.x} ${b.y}`}
   const e=pts[pts.length-1];return d+`L${e.x} ${e.y}`}
+/* Path for an edge that has ports: elbow (the default), curved or straight, per M.lineStyle. */
 function routedGeom(r){
   const st=M.lineStyle||"elbow",uA=SIDEV[r._sA],uB=SIDEV[r._sB],pA=r._pA,pB=r._pB;
   const end=M.kind==="flow"&&r.arrow?{x:pB.x+uB.x*9,y:pB.y+uB.y*9}:pB;
@@ -522,6 +629,8 @@ function routedGeom(r){
 const isMany=k=>k==="zeroMany"||k==="oneMany",isOne=k=>k==="one"||k==="zeroOne";
 /* ER: draw the "one" side above the "many" side */
 const flowDir=e=>M.kind==="er"&&isMany(e.ka)&&isOne(e.kb)?[e.b,e.a]:[e.a,e.b];
+/* Geometry of one edge: {pA, pB, H, path, uA, uB}. H is where the label and drag handle sit; uA and uB are unit
+   directions at each end, used to orient markers. Bent edges and self-loops are a curve through H. */
 function geom(r){
   if(r._pA&&r._pB&&!r.bend&&r.a!==r.b)return routedGeom(r);
   const A=byId(r.a),B=byId(r.b);const mid=relMid(r);
@@ -534,6 +643,7 @@ function geom(r){
   const path=C?`M${pA.x} ${pA.y}Q${C.x} ${C.y} ${end.x} ${end.y}`:`M${pA.x} ${pA.y}L${end.x} ${end.y}`;
   return {pA,pB,H,path,uA,uB};
 }
+/* Crow's-foot marker for an ER relationship end. */
 function crowMarker(p,u,kind){
   const n={x:-u.y,y:u.x},at=d=>({x:p.x+u.x*d,y:p.y+u.y*d});
   const bar=d=>{const c=at(d);return `M${c.x+n.x*7} ${c.y+n.y*7}L${c.x-n.x*7} ${c.y-n.y*7}`};
@@ -545,6 +655,8 @@ function crowMarker(p,u,kind){
 function arrowHead(p,u){const n={x:-u.y,y:u.x},b={x:p.x+u.x*11,y:p.y+u.y*11};return `<path class="arrow" d="M${p.x} ${p.y}L${b.x+n.x*5.5} ${b.y+n.y*5.5}L${b.x-n.x*5.5} ${b.y-n.y*5.5}Z"/>`}
 
 /* ================= state classes (focus, walkthrough) ================= */
+/* What is highlighted right now (walkthrough or Focus). Returns null when nothing is dimmed.
+   renderInner() turns the result into the dim / cur / next / walked CSS classes. */
 function litSets(){
   if(M.kind==="seq"){
     if(W.on){const e=M.edges[W.si];return {mode:"seqwalk",si:W.si,nodes:new Set(e?[e.a,e.b].filter(Boolean):[])}}
@@ -566,6 +678,8 @@ function litSets(){
 }
 
 /* ================= drawing ================= */
+/* Builds the SVG markup for the whole diagram. plain = true is for exports and thumbnails: no hit areas,
+   selection or handles. Edge labels are drawn last so boxes never cover them. */
 function renderInner(plain){
   if(M.kind==="seq")return renderSeq(plain);
   M.nodes.forEach(measure);layoutGroups();assignPorts();
@@ -617,16 +731,20 @@ function renderInner(plain){
   return out+labs;
 }
 const GRID=`<rect x="-20000" y="-20000" width="40000" height="40000" fill="url(#dots)" data-hit="bg"/>`;
+/* True when Mermaid's own drawing is on screen: a "view" kind, or Mermaid view of an editable diagram. */
 function viewing(){return M.kind==="view"||S.mview}
+/* Redraws the canvas with our renderer, or with Mermaid's for "view" kinds and Mermaid view. */
 function draw(){if(viewing()){drawMermaid();return}world.innerHTML=GRID+renderInner(false);applyView()}
 /* ---- Mermaid library: renders every diagram type ---- */
 let mmdP=null,rid=0,MV=null,mvToken=0;
+/* Loads the Mermaid library on first use (it is large, so pages that never need it don't pay for it). */
 function loadMermaid(){
   if(window.mermaid&&typeof window.mermaid.render==="function")return Promise.resolve(window.mermaid);if(mmdP)return mmdP;
   mmdP=new Promise((res,rej)=>{const sc=document.createElement("script");sc.src=MERMAID_URL;
     sc.onload=()=>window.mermaid?res(window.mermaid):rej(new Error("load"));sc.onerror=()=>{mmdP=null;rej(new Error("load"))};document.head.appendChild(sc)});
   return mmdP}
 function isDark(){const d=document.documentElement.dataset.theme;return d==="dark"||(d!=="light"&&matchMedia("(prefers-color-scheme: dark)").matches)}
+/* Renders Mermaid text with the official library. Returns the parsed <svg> element and its size. */
 async function mermaidSVG(src,dark){
   const m=await loadMermaid();
   m.initialize({startOnLoad:false,suppressErrorRendering:true,theme:dark?"dark":"default",securityLevel:"strict",htmlLabels:false,flowchart:{htmlLabels:false},fontFamily:SYS,themeVariables:{fontFamily:SYS}});
@@ -640,6 +758,7 @@ async function mermaidSVG(src,dark){
   return {root,vb,w:vb[2],h:vb[3]};
 }
 function mermaidError(e){const msg=String((e&&(e.message||e.str))||e||"").split("\n").slice(0,4).join(" ").slice(0,300);return msg}
+/* Draws M with the Mermaid library. On an error it keeps the last good drawing and reports the message. */
 async function drawMermaid(){
   const tok=++mvToken;const src=toMermaid();const prev=MV;
   try{
@@ -653,13 +772,18 @@ async function drawMermaid(){
   if($("v-err")){$("v-err").textContent=MV.err||"";$("v-err").hidden=!MV.err}else inspector();
 }
 
+/* Applies the viewport V to the canvas and refreshes the zoom label and minimap. */
 function applyView(){world.setAttribute("transform",`translate(${V.tx},${V.ty}) scale(${V.k})`);$("zoomval").textContent=Math.round(V.k*100)+"%";updateMinimap()}
+/* Pointer event → world coordinates. */
 function toWorld(ev){const r=svg.getBoundingClientRect();return {x:(ev.clientX-r.left-V.tx)/V.k,y:(ev.clientY-r.top-V.ty)/V.k}}
 function zoomAt(k,px,py){k=Math.min(2.5,Math.max(.2,k));V.tx=px-(px-V.tx)*(k/V.k);V.ty=py-(py-V.ty)*(k/V.k);V.k=k;applyView()}
+/* Bounding box of the whole diagram in world coordinates. */
 function bbox(){if(viewing())return MV&&MV.w?{x0:0,y0:0,x1:MV.w,y1:MV.h}:{x0:0,y0:0,x1:400,y1:300};if(M.kind==="seq")return seqBBox();M.nodes.forEach(measure);layoutGroups();assignPorts();let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
   M.nodes.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
   M.edges.forEach(e=>{if(!byId(e.a)||!byId(e.b))return;const H=geom(e).H;x0=Math.min(x0,H.x-60);x1=Math.max(x1,H.x+60);y0=Math.min(y0,H.y-14);y1=Math.max(y1,H.y+14)});
   return {x0,y0,x1,y1}}
+/* Fits the diagram in the canvas. If that would make it unreadably small, it shows the top at a readable
+   zoom instead; fit(true), the Fit button, always shows everything. */
 function fit(all){
   if(!viewing()&&!M.nodes.length){V.tx=40;V.ty=40;V.k=1;applyView();return}
   const b=bbox(),r=svg.getBoundingClientRect(),pad=30;
@@ -708,6 +832,8 @@ function layerUnits(U,E,horiz){
   return {pos:P,back};
 }
 let BACK=new Set();
+/* Lays out the direct children of one group (gid = null is the top level), innermost groups first, so each
+   group then moves as one block. Separate connected parts at the top level are packed together. */
 function layoutScope(gid,horiz){
   const units=M.nodes.filter(n=>parentOf(n)===gid);if(!units.length)return;
   units.filter(isGroup).forEach(g=>layoutScope(g.id,horiz));
@@ -729,6 +855,7 @@ function layoutScope(gid,horiz){
   layoutGroups();
   E.forEach(([a,b],j)=>{if(back.has(a+">"+b))BACK.add(which[j])});
 }
+/* Tidy for flowcharts, state and class diagrams, and ER diagrams (the "one" side above the "many" side). */
 function layered(){
   if(!M.nodes.length)return;M.nodes.forEach(measure);
   const horiz=M.dir==="LR"||M.dir==="RL";BACK=new Set();
@@ -741,6 +868,7 @@ function layered(){
   M.edges.forEach((e,k)=>{const a=byId(e.a),b=byId(e.b);if(!a||!b||a===b||!BACK.has(k))return;
     const off=horiz?{dx:0,dy:Math.max(a.h,b.h)/2+60}:{dx:Math.max(a.w,b.w)/2+70,dy:0};e.bend=off});
 }
+/* Force-directed layout of one connected set of nodes. */
 function forceComp(N){
   const n=N.length,idx=new Map(N.map((e,i)=>[e.id,i]));
   const avg=N.reduce((t,e)=>t+Math.sqrt(e.w*e.h),0)/Math.max(1,n);const K=Math.max(90,Math.min(200,avg*1.5));
@@ -758,6 +886,7 @@ function forceComp(N){
     if(!moved)break}
   N.forEach((e,i)=>{e.x=P[i].x-e.w/2;e.y=P[i].y-e.h/2});
 }
+/* Organic layout: forceComp() for each connected part, then packBoxes(). Used for ER when Tidy style is Organic. */
 function force(){
   const all=M.nodes;if(!all.length)return;all.forEach(measure);const idx=new Map(all.map((e,i)=>[e.id,i]));
   const E=[];M.edges.forEach(r=>{const i=idx.get(r.a),j=idx.get(r.b);if(i!==undefined&&j!==undefined&&i!==j)E.push([i,j])});
@@ -768,9 +897,12 @@ function force(){
   all.forEach(n=>{n.x=Math.round((n.x-mx+60)/10)*10;n.y=Math.round((n.y-my+60)/10)*10});
   M.edges.forEach(r=>r.bend=null);
 }
+/* The Tidy button. */
 function tidy(){mutate(()=>{if(M.kind==="er"&&M.tidyStyle==="organic")force();else layered()});fit()}
 
 /* ================= pointer interaction ================= */
+/* drag = the gesture in progress: {mode: node | group | bend | pan | seqcol | seqrow | seqend, ...}.
+   last = the previous pointerdown, used to detect double-clicks ourselves (dblclick is unreliable with pointer capture). */
 let drag=null,last=null;
 svg.addEventListener("pointerdown",ev=>{
   if(ev.button>0)return;closeMenu();
@@ -819,12 +951,14 @@ svg.addEventListener("pointermove",ev=>{
   else if(drag.mode==="bend"){const m=relMid(drag.r);drag.r.bend={dx:w.x-m.x,dy:w.y-m.y};drag.moved=true;draw()}
   else if(drag.mode==="pan"){if(Math.abs(ev.clientX-drag.sx)+Math.abs(ev.clientY-drag.sy)>3)drag.panned=true;V.tx=drag.tx+ev.clientX-drag.sx;V.ty=drag.ty+ev.clientY-drag.sy;applyView()}
 });
+/* Ends a gesture: records undo and saves if something moved; a plain click on empty canvas clears the selection. */
 function endDrag(){if(drag&&drag.mode==="pan"&&drag.bg&&!drag.panned&&S.sel&&!W.on){S.sel=null;draw();inspector()}
   if(drag&&drag.moved){pushHistory(drag.snap);syncCode();save();if(S.sel&&!W.on)inspector()}drag=null;svg.classList.remove("panning")}
 svg.addEventListener("pointerup",endDrag);svg.addEventListener("pointercancel",endDrag);
 svg.addEventListener("wheel",ev=>{ev.preventDefault();const r=svg.getBoundingClientRect();zoomAt(V.k*Math.exp(-ev.deltaY*0.0015),ev.clientX-r.left,ev.clientY-r.top)},{passive:false});
 
 function renameER(n,v){const k=cleanName(v);if(k&&k!==n.key)mutate(()=>{n.key=uniqueKey(k,n.id)})}
+/* Double-click: edit the text under the pointer, or add a node on empty canvas. */
 function onDouble(kind,a,b,w){
   const n0=a&&kind!=="label"&&kind!=="rel"?byId(a):null;
   if(n0&&isGroup(n0)&&(kind==="title"||kind==="node")){edit(`title:${a}`,n0.text||n0.key,v=>{const t=v.trim();if(t&&t!==n0.text)mutate(()=>{n0.text=t})});return}
@@ -840,6 +974,7 @@ function onDouble(kind,a,b,w){
   else if(kind==="label"||kind==="rel"){const r=M.edges[+a];edit(r.label?`label:${a}`:`rel:${a}`,r.label||"",v=>mutate(()=>{r.label=v.trim()||(M.kind==="er"?"has":"")}),w)}
   else if(kind==="bg")addNode(w);
 }
+/* Shows the floating text input over the SVG element with data-hit = key. commit(value) runs on Enter or blur. */
 function edit(key,value,commit,at){
   const el=world.querySelector(`[data-hit="${key}"]`);const c=stage.getBoundingClientRect();
   let r=el?el.getBoundingClientRect():null;
@@ -854,6 +989,7 @@ inline.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();com
 inline.addEventListener("blur",()=>setTimeout(commitInline,0));
 
 /* ================= actions ================= */
+/* Adds a table / step / state / class / participant at `at` (world point) or the centre of the view. */
 function addNode(at){
   if(W.on)walkStop();
   if(M.kind==="seq")return seqAddPart();
@@ -866,15 +1002,18 @@ function addNode(at){
   mutate(()=>{M.nodes.push(n);S.sel={type:"node",id:n.id}});
   if(M.kind==="er")edit(`title:${n.id}`,n.key,v=>renameER(n,v));else if(M.kind==="class")edit(`title:${n.id}`,n.key,v=>renameClass(n,v));else edit(`node:${n.id}`,n.text,v=>{if(v.trim())mutate(()=>{n.text=v.trim()})});
 }
+/* Turns Connect mode on or off. src = the first box, once picked. */
 function setConnect(on,src){S.connect=on;S.src=on&&src?src:null;$("t-connect").setAttribute("aria-pressed",on);svg.classList.toggle("connecting",on);
   if(on&&W.on)walkStop();
   const h=$("hint");h.classList.toggle("on",on);h.textContent=on?(S.src?`Now click the box to connect "${nodeLabel(byId(S.src))}" to`:"Click the first box"):"";draw()}
+/* Connect mode: the first click picks the source, the second creates the edge. */
 function connectClick(n){
   if(!S.src){setConnect(true,n.id);return}
   const a=S.src;if(M.kind==="class"&&(isGroup(n)||isGroup(byId(a)))){toast("Namespaces can't be connected. Connect the classes inside them.");setConnect(false);return}
   const e=M.kind==="er"?{a,b:n.id,ka:"one",kb:"zeroMany",ident:true,label:"has",bend:null}:M.kind==="class"?{a,b:n.id,ma:"",mb:"arrow",dotted:false,la:"",lb:"",label:"",bend:null}:{a,b:n.id,label:"",style:"solid",arrow:true,bend:null};
   mutate(()=>{M.edges.push(e);S.sel={type:"edge",i:M.edges.length-1}});setConnect(false);
 }
+/* Deletes the selected node (with its edges) or edge. Deleting a group only ungroups its children. */
 function deleteSelection(){
   if(!S.sel)return;
   if(S.sel.type==="node"&&isGroup(byId(S.sel.id))){const id=S.sel.id,g=byId(id);mutate(()=>{M.nodes.forEach(c=>{if(c.g===id)c.g=g.g||null});M.nodes=M.nodes.filter(e=>e.id!==id);M.edges=M.edges.filter(r=>r.a!==id&&r.b!==id);S.sel=null});return}
@@ -883,6 +1022,7 @@ function deleteSelection(){
 }
 
 /* ================= walkthrough ================= */
+/* Where a walkthrough can start: nodes nothing points to, top-level start nodes first. */
 function startNodes(){const inc=new Set(M.edges.filter(e=>e.a!==e.b).map(e=>e.b));const s=M.nodes.filter(n=>!inc.has(n.id)&&!isGroup(n)&&n.shape!=="end");
   const pri=s.filter(n=>n.shape==="start"&&!parentOf(n));const all=pri.concat(s.filter(n=>!pri.includes(n)));return all.length?all:M.nodes.slice(0,1)}
 function walkStart(id){W.on=true;W.trail=[id];W.etrail=[];S.sel=null;S.focus=false;$("t-focus").setAttribute("aria-pressed",false);if(S.connect)setConnect(false);
@@ -894,7 +1034,11 @@ function walkStop(){W.on=false;W.trail=[];W.etrail=[];$("t-walk").setAttribute("
 
 /* ================= sequence diagrams ================= */
 const SEQ_ARROWS={"->>":"Solid arrow","-->>":"Dashed arrow (reply)","->":"Solid line, no head","-->":"Dashed line, no head","-x":"Solid with cross","--x":"Dashed with cross","-)":"Solid async","--)":"Dashed async"};
+/* Sequence keywords that are recognised but not editable on the canvas (box, create, destroy...).
+   Meeting one sends the file to the outline editor. */
 const SEQ_BLOCK=/^(loop|alt|else|opt|par|and|critical|option|break|rect|end|box|activate|deactivate|create|destroy|links?|properties|details)\b/i;
+/* sequenceDiagram text → participants plus an ORDERED list of rows:
+   msg, note, open (loop/alt/opt/par/critical/break/rect), mid (else/and/option), close (end), act (activate/deactivate). */
 function parseSeq(src){
   const parts=new Map(),items=[],meta={layout:{},bends:[],notes:{}};let auto=false,title="",unsupported=null,depth=0;const errors=[];
   const ensure=(k,type,label)=>{if(!parts.has(k))parts.set(k,{key:k,text:label||k,shape:type||"participant"});else{const p=parts.get(k);if(type)p.shape=type;if(label)p.text=label}return k};
@@ -918,6 +1062,7 @@ function parseSeq(src){
   });
   return {parts:[...parts.values()],items,auto,title,meta,errors,unsupported};
 }
+/* Sequence model → Mermaid text. Skips activations that would be invalid (ending one that never started). */
 function seqToMermaid(){
   const k=id=>byId(id).key;const L=["sequenceDiagram"];if(M.title)L.push(`    title ${M.title}`);if(M.auto)L.push("    autonumber");
   M.nodes.forEach(n=>L.push(`    ${n.shape==="actor"?"actor":"participant"} ${n.key}${n.text&&n.text!==n.key?` as ${n.text}`:""}`));
@@ -941,6 +1086,8 @@ function noteBox(e,cx){const xa=cx.get(e.a);let x0,x1;const tl=Math.min(240,tw(e
   if(e.pos==="over"){if(e.b&&cx.has(e.b)){const xb=cx.get(e.b);x0=Math.min(xa,xb)-50;x1=Math.max(xa,xb)+50;if(x1-x0<tl){const c=(x0+x1)/2;x0=c-tl/2;x1=c+tl/2}}else{const h=Math.max(60,tl/2);x0=xa-h;x1=xa+h}}
   else if(e.pos==="left of"){x1=xa-14;x0=x1-Math.max(100,tl)}else{x0=xa+14;x1=x0+Math.max(100,tl)}
   return {x0,x1}}
+/* Computes column x positions (M._seq.cx), a y for every row (M._seq.rows) and the bottom edge.
+   Sequence diagrams save no layout: node order is column order and edge order is row order. */
 function seqLayout(){
   const N=M.nodes;N.forEach(n=>{n.w=Math.ceil(Math.max(96,tw(n.text,"node")+30));n.h=n.shape==="actor"?66:42});
   const head=N.length?Math.max(42,...N.map(n=>n.h)):42;
@@ -963,6 +1110,7 @@ function seqLayout(){
 }
 function crossAt(p,u){const c={x:p.x+u.x*7,y:p.y+u.y*7};return `<path class="mk" d="M${c.x-5} ${c.y-5}L${c.x+5} ${c.y+5}M${c.x-5} ${c.y+5}L${c.x+5} ${c.y-5}"/>`}
 function openHead(p,u){const n={x:-u.y,y:u.x},b={x:p.x+u.x*10,y:p.y+u.y*10};return `<path class="mk" d="M${b.x+n.x*6} ${b.y+n.y*6}L${p.x} ${p.y}L${b.x-n.x*6} ${b.y-n.y*6}"/>`}
+/* SVG for a sequence diagram: lifelines, block frames, activation bars, messages, notes, participant heads. */
 function renderSeq(plain){
   seqLayout();const {cx,rows,head,bottom}=M._seq;const L=plain?null:litSets();let out="",heads="";
   M.nodes.forEach(n=>{const x=cx.get(n.id);let cls="node";
@@ -1026,6 +1174,8 @@ function seqBBox(){seqLayout();const {cx,bottom}=M._seq;let x0=1e9,x1=-1e9;
   if(M.edges.some(e=>e.t==="open")&&cx.size){const xs=[...cx.values()];x0=Math.min(x0,Math.min(...xs)-90);x1=Math.max(x1,Math.max(...xs)+90)}
   if(x0>x1){x0=0;x1=300}return {x0,y0:0,x1,y1:bottom}}
 function nearestLifeline(x,max){let best=null,d=max||1e9;M.nodes.forEach(n=>{const dd=Math.abs(M._seq.cx.get(n.id)-x);if(dd<d){d=dd;best=n}});return best}
+/* Pointer handling for sequence diagrams: drag a participant sideways (seqcol), a row up or down (seqrow),
+   or a message end onto another lifeline (seqend). */
 function seqDown(ev,kind,a,b,w){
   svg.setPointerCapture(ev.pointerId);
   if(W.on){if(kind==="rel"||kind==="end")walkTo(+a);else drag={mode:"pan",sx:ev.clientX,sy:ev.clientY,tx:V.tx,ty:V.ty};return}
@@ -1082,6 +1232,7 @@ function seqWalkPanel(){
   $("w-back").onclick=()=>seqMoveStep(-1);$("w-next").onclick=()=>seqMoveStep(1);$("w-restart").onclick=()=>walkTo(st[0]);$("w-exit").onclick=walkStop;
   pane.querySelectorAll(".choice").forEach(b=>b.onclick=()=>walkTo(+b.dataset.i));
 }
+/* Side panel for sequence diagrams (diagram, participant, message, note, block, branch, activation). */
 function seqInspector(){
   const optP=(sel,blank)=>(blank?`<option value="">(none)</option>`:"")+M.nodes.map(n=>`<option value="${n.id}"${n.id===sel?" selected":""}>${esc(n.text)}</option>`).join("");
   if(!S.sel){
@@ -1169,6 +1320,11 @@ function seqInspector(){
 
 /* ================= editing for every other diagram type (drawn by Mermaid) ================= */
 const clamp01=v=>Math.max(0,Math.min(1,parseFloat(v)||0));
+/* Table editors for chart-like types drawn by Mermaid. For each type:
+     re     matches one data line (first group = indentation)
+     get    match → cell values            make   (cells, indentation) → the line
+     blank  cells for a newly added row
+   Add an entry to give another diagram type a table. See docs/HOW-TO.md. */
 const VSPEC={
   pie:{name:"Slices",cols:["Label","Value"],re:/^(\s*)"([^"]*)"\s*:\s*([-\d.]+)\s*$/,get:m=>[m[2],m[3]],make:(c,ind)=>`${ind||"    "}"${c[0].replace(/"/g,"'")}" : ${parseFloat(c[1])||0}`,blank:["New slice","10"]},
   "sankey-beta":{name:"Flows",cols:["From","To","Value"],re:/^(\s*)([^,%]+),([^,]+),\s*([-\d.]+)\s*$/,get:m=>[m[2].trim(),m[3].trim(),m[4]],make:(c,ind)=>`${ind||""}${c[0].replace(/,/g," ")},${c[1].replace(/,/g," ")},${parseFloat(c[2])||0}`,blank:["Source","Target","10"]},
@@ -1180,6 +1336,8 @@ const VSPEC={
 const TITLED=["pie","gantt","journey","timeline","quadrantChart","xychart-beta"];
 const srcLines=()=>M.src.split("\n");
 let viewT=0,viewSnap=null;
+/* Ways to change M.src for "view" kinds: setSrcLive() while typing (debounced redraw; commitSrc() records one
+   undo step when the field loses focus) and structSrc() for add / delete / move (immediate). */
 function setSrcLive(lines){if(!viewSnap)viewSnap=snapshot();M.src=lines.join("\n");codeDirty=false;syncCode();save();clearTimeout(viewT);viewT=setTimeout(draw,350)}
 function commitSrc(){if(viewSnap){pushHistory(viewSnap);viewSnap=null}}
 function structSrc(fn){const s0=snapshot();const L=srcLines();fn(L);M.src=L.join("\n");pushHistory(s0);changed()}
@@ -1191,6 +1349,7 @@ function setTitle(L,text){const t=titleLine(L);const h=L.findIndex(l=>l.trim()&&
   else if(t)L[t.i]=`${t.ind}title ${val}`;
   else if(M.type==="pie")L[h]=`${L[h].replace(/\s+$/,"")} title ${text}`;
   else L.splice(h+1,0,`    title ${val}`)}
+/* Side panel for "view" kinds: a title field, a table when VSPEC knows the type, and an outline of every line. */
 function viewEditor(){
   const L=srcLines(),spec=VSPEC[M.type],hdr=L.findIndex(l=>l.trim()&&!l.trim().startsWith("%%"));
   const rows=spec?L.map((l,i)=>{const m=l.match(spec.re);return m&&i!==hdr?{i,ind:m[1],c:spec.get(m)}:null}).filter(Boolean):[];
@@ -1224,6 +1383,8 @@ function viewEditor(){
 }
 /* double-click any text in a Mermaid-drawn diagram to change it in the code */
 function labelOf(el){const ts=[...el.querySelectorAll("tspan")].filter(t=>!t.querySelector("tspan"));return (ts.length?ts.map(t=>t.textContent):[el.textContent]).map(x=>x.trim()).filter(Boolean).join(" ")}
+/* Double-click on text in a Mermaid drawing: finds the same words in M.src (the nth occurrence, to match the
+   nth identical label) and replaces them. */
 function viewTextEdit(el){
   const label=labelOf(el);if(!label)return;
   const texts=[...world.querySelectorAll("#mview text")];const k=texts.slice(0,texts.indexOf(el)).filter(t=>labelOf(t)===label).length;
@@ -1241,6 +1402,7 @@ function editEl(el,value,commit){
   inline.value=value;inline.hidden=false;inline._commit=commit;requestAnimationFrame(()=>{inline.focus();inline.select()});
 }
 /* ================= big diagrams: packing, minimap, find, jump from code, full screen ================= */
+/* Connected components of a graph with n nodes and edges E = [[a, b], ...]. Returns arrays of node indexes. */
 function compsOf(n,E){const par=[...Array(n).keys()];const f=i=>par[i]===i?i:(par[i]=f(par[i]));E.forEach(([a,b])=>{par[f(a)]=f(b)});const m=new Map();for(let i=0;i<n;i++){const r=f(i);if(!m.has(r))m.set(r,[]);m.get(r).push(i)}return [...m.values()]}
 /* Shelf-pack separate parts of a diagram into a compact block instead of letting them drift apart. */
 function packBoxes(items,gap){if(items.length<2)return;
@@ -1251,6 +1413,7 @@ function boxOf(list,move){let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;list.forEach(n=>{x0=
 function shiftUnit(u,dx,dy){if(isGroup(u))descendants(u.id).forEach(c=>{if(!isGroup(c)){c.x+=dx;c.y+=dy}});else{u.x+=dx;u.y+=dy}}
 const mm=$("minimap");let mmMap=null,mmDrag=false;
 const mmShow=v=>{if(v)mm.removeAttribute("hidden");else mm.setAttribute("hidden","")};
+/* Redraws the minimap. It is hidden while the whole diagram fits in view. */
 function updateMinimap(){if(!mm)return;const r=svg.getBoundingClientRect();if(!r.width){mmShow(false);return}
   if(!viewing()&&!M.nodes.length){mmShow(false);return}
   let b;try{b=bbox()}catch(e){mmShow(false);return}
@@ -1271,14 +1434,17 @@ if(mm){const go=ev=>{if(!mmMap)return;const r=mm.getBoundingClientRect(),sr=svg.
 function animateView(tx,ty,k){if(matchMedia("(prefers-reduced-motion: reduce)").matches){V.tx=tx;V.ty=ty;V.k=k;applyView();return}
   const s0={tx:V.tx,ty:V.ty,k:V.k},t0=performance.now();cancelAnimationFrame(anim);
   const step=t=>{const p=Math.min(1,(t-t0)/320),e=1-Math.pow(1-p,3);V.tx=s0.tx+(tx-s0.tx)*e;V.ty=s0.ty+(ty-s0.ty)*e;V.k=s0.k+(k-s0.k)*e;applyView();if(p<1)anim=requestAnimationFrame(step)};anim=requestAnimationFrame(step)}
+/* Animates the view to show a world rectangle. */
 function frameWorld(x0,y0,x1,y1,maxK){const r=svg.getBoundingClientRect(),pad=70;
   let k=Math.min(maxK||1.1,(r.width-pad*2)/Math.max(1,x1-x0),(r.height-pad*2)/Math.max(1,y1-y0));k=Math.max(0.35,k);
   animateView(r.width/2-(x0+x1)/2*k,r.height/2-(y0+y1)/2*k,k)}
+/* Selects and zooms to the given nodes (and optionally an edge). Used by Find and by clicks in the code tab. */
 function focusNodes(ns,edgeI){ns=ns.filter(Boolean);if(!ns.length)return;
   if(M.kind==="seq")seqLayout();else{M.nodes.forEach(measure);layoutGroups()}
   let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;ns.forEach(n=>{x0=Math.min(x0,n.x);y0=Math.min(y0,n.y);x1=Math.max(x1,n.x+n.w);y1=Math.max(y1,n.y+n.h)});
   if(M.kind==="seq"&&edgeI!==undefined&&M._seq.rows[edgeI]){const ry=M._seq.rows[edgeI].y;y0=Math.min(y0,ry-40);y1=Math.max(y1,ry+30)}
   S.sel=edgeI!==undefined?{type:"edge",i:edgeI}:{type:"node",id:ns[0].id};draw();inspector();frameWorld(x0,y0,x1,y1)}
+/* The Find box: zoom to the first node whose label or key matches q. */
 function findBox(q){q=String(q||"").trim().toLowerCase();if(!q)return;
   if(viewing()){const t=[...world.querySelectorAll("#mview text")].find(el=>labelOf(el).toLowerCase().includes(q));if(!t){toast(`Nothing called "${q}" on the diagram`);return}
     const r=t.getBoundingClientRect(),sr=svg.getBoundingClientRect(),wx=x=>(x-sr.left-V.tx)/V.k,wy=y=>(y-sr.top-V.ty)/V.k;frameWorld(wx(r.left)-60,wy(r.top)-60,wx(r.right)+60,wy(r.bottom)+60,1.2);return}
@@ -1290,6 +1456,7 @@ $("t-find").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault(
 $("t-find").addEventListener("input",e=>{if(!e.inputType||e.inputType==="insertReplacementText")findBox(e.target.value)});
 /* click a line in the Mermaid code to jump to what it describes */
 let codeFT=0;
+/* Code tab → canvas: finds the node keys named on the clicked line and zooms to that node or relationship. */
 function focusFromCode(){
   if(viewing()||!M.nodes.length)return;
   const t=code.value,pos=code.selectionStart;const ls=t.lastIndexOf("\n",pos-1)+1,le0=t.indexOf("\n",pos),le=le0<0?t.length:le0;const line=t.slice(ls,le).trim();
@@ -1340,6 +1507,8 @@ document.addEventListener("keydown",e=>{
 });
 $("m-edit").onclick=()=>{if(M.kind==="view"||!S.mview)return;S.mview=false;kindUI();draw();inspector();fit()};
 $("m-mmd").onclick=()=>{if(S.mview||M.kind==="view")return;if(W.on)walkStop();if(S.connect)setConnect(false);S.sel=null;S.mview=true;kindUI();MV=null;draw();inspector()};
+/* Updates toolbar labels, disabled states and the hint under the canvas for the current kind and mode.
+   Call it whenever M.kind changes. */
 function kindUI(){
   const er=M.kind==="er",view=M.kind==="view";if(view)S.mview=false;
   const seq=M.kind==="seq",cls=M.kind==="class",st=M.kind==="flow"&&M.flavor==="state";
@@ -1360,10 +1529,15 @@ function kindUI(){
 
 /* ================= inspector ================= */
 const pane=$("pane-inspect");
+/* HTML for a labelled inspector input (or textarea). */
 function field(id,label,value,area){return `<div class="field"><label for="${id}">${label}</label>${area?`<textarea class="in" id="${id}" rows="3">${esc(value)}</textarea>`:`<input class="in" id="${id}" value="${esc(value)}" spellcheck="false">`}</div>`}
+/* Binds an inspector input so typing updates the model at once and leaving the field records ONE undo step.
+   It deliberately does not rebuild the inspector, which would destroy the input being typed in. */
 function live(el,apply){let snap=null;el.addEventListener("focus",()=>{snap=snapshot()});
   el.addEventListener("input",()=>{apply(el.value);draw();syncCode();save()});
   el.addEventListener("change",()=>{pushHistory(snap);snap=snapshot()})}
+/* Rebuilds the side panel for the current selection by replacing its HTML.
+   Never call it while the user is typing in the panel; use live() for text fields. */
 function inspector(){
   if(W.on)return M.kind==="seq"?seqWalkPanel():walkPanel();
   if(M.kind==="view"&&!READONLY)return viewEditor();
@@ -1499,6 +1673,7 @@ function inspector(){
   $("i-swap").onclick=()=>mutate(()=>{[r.a,r.b]=[r.b,r.a];if(M.kind==="er")[r.ka,r.kb]=[r.kb,r.ka];if(M.kind==="class"){[r.ma,r.mb]=[r.mb,r.ma];[r.la,r.lb]=[r.lb,r.la]}});
   $("i-del").onclick=deleteSelection;
 }
+/* Side panel for share links: details of the selection, no editing. */
 function readonlyPanel(){
   const kindName=M.flavor==="state"?"State diagram":({er:"ER diagram",flow:"Flowchart",seq:"Sequence diagram",class:"Class diagram"}[M.kind]||"Diagram");let sel="";
   if(S.sel&&S.sel.type==="node"){const n=byId(S.sel.id);if(n)sel=`<p class="eyebrow">${M.kind==="er"?"Table":M.kind==="seq"?"Participant":"Step"}</p><h2>${esc(nodeLabel(n))}</h2>`+
@@ -1509,6 +1684,7 @@ function readonlyPanel(){
     sel=`<p class="eyebrow">${M.kind==="seq"?(e.t==="note"?"Note":"Message"):M.kind==="er"?"Relationship":"Connection"}</p><h2>${esc(e.label||"(no label)")}</h2>`+(A&&B?`<div class="card-sm"><b>${esc(nodeLabel(A))}</b><span>→</span><b>${esc(nodeLabel(B))}</b></div>`:"")}}
   pane.innerHTML=(sel||`<p class="eyebrow">${kindName} · view only</p><h2>${esc(DOC_TITLE)}</h2>`)+`<p class="eyebrow">What you can do</p><ul class="tips"><li>Drag to pan and scroll to zoom.</li><li>Click a box or line to see its details${M.kind==="er"?"":" and notes"}.</li>${M.kind==="er"?"":"<li><b>Walkthrough</b> steps through it one stage at a time.</li>"}<li><b>Focus</b> fades everything not connected to what you select.</li><li><b>Export</b> saves a PNG, SVG or the Mermaid code.</li></ul>`;
 }
+/* Side panel during a flowchart or state walkthrough. */
 function walkPanel(){
   const cur=byId(W.trail[W.trail.length-1]);const outs=M.edges.map((e,i)=>[e,i]).filter(([e])=>e.a===cur.id);
   const starts=startNodes();
@@ -1531,12 +1707,15 @@ const code=$("code");let codeDirty=false;
 code.addEventListener("click",()=>{clearTimeout(codeFT);codeFT=setTimeout(focusFromCode,60)});
 code.addEventListener("keyup",e=>{if(/^(Arrow|Page)|^(Home|End)$/.test(e.key)){clearTimeout(codeFT);codeFT=setTimeout(focusFromCode,150)}});
 
+/* Copies the model into the code tab, unless the user has unsaved typing there. */
 function syncCode(){if(!codeDirty)code.value=toMermaid()}
 let codeT=0,codeSnap=null;
 code.addEventListener("input",()=>{codeDirty=true;$("c-msg").textContent="";
   if(M.kind!=="view"||READONLY)return;clearTimeout(codeT);codeT=setTimeout(()=>{const t=code.value;if(detectKind(t)!=="view")return;
     if(!codeSnap)codeSnap=snapshot();M.src=t.trim();M.type=firstWord(t);M.why="";save();draw()},500)});
 code.addEventListener("blur",()=>{if(codeSnap){pushHistory(codeSnap);codeSnap=null;codeDirty=false;inspector()}});
+/* Replaces the whole diagram from Mermaid text (Apply code, templates, restoring a version).
+   Returns false and shows a message when the text can't be used. */
 function applySource(src,keep){
   const {model,errors}=build(src,keep);const m=$("c-msg");
   if(!model||(model.kind!=="view"&&!model.nodes.length)){m.className="msg err";m.textContent=errors[0]||"Nothing to draw. Check that the code starts with erDiagram or flowchart.";tab("code");return false}
@@ -1572,6 +1751,8 @@ const PALETTE={
   light:{"--panel":"#FFFFFF","--ink":"#18202E","--muted":"#5A6476","--line":"#D4D9E2","--canvas":"#FFFFFF","--head":"#E9EDF4","--edge":"#5F6980","--node-line":"#9AA3B5","--accent":"#2D55E0","--accent-soft":"#E2E8FC","--pk":"#A86A12","--fk":"#0E7F74","--uk":"#7C4FC4"},
   dark:{"--panel":"#151B25","--ink":"#E5E9F1","--muted":"#98A2B4","--line":"#2A3241","--canvas":"#111720","--head":"#1C2431","--edge":"#8D97AB","--node-line":"#566074","--accent":"#7D9BFF","--accent-soft":"#1F2846","--pk":"#E5AF4A","--fk":"#4CC6B6","--uk":"#B793F2"}};
 const BG={light:"#FFFFFF",dark:"#111720"};
+/* SVG text for export and thumbnails. bg = "light" | "dark" | "transparent". Uses the fixed PALETTE colours,
+   so the result doesn't depend on the viewer's theme. */
 async function buildExport(bg){
   const dark=bg==="dark";
   if(viewing()){
@@ -1589,12 +1770,14 @@ async function buildExport(bg){
 }
 const MAXSIDE=16000,MAXAREA=2.4e8;
 function fitScale(s,scale){let k=scale;while(k>1&&(s.w*k>MAXSIDE||s.h*k>MAXSIDE||s.w*s.h*k*k>MAXAREA))k--;return k}
+/* Draws an exported SVG onto a canvas at `scale` and returns a PNG blob. */
 function toPNG(s,scale){return new Promise((res,rej)=>{const url=URL.createObjectURL(new Blob([s.text],{type:"image/svg+xml"}));const img=new Image();
   img.onload=()=>{try{const c=document.createElement("canvas");c.width=Math.round(s.w*scale);c.height=Math.round(s.h*scale);const x=c.getContext("2d");x.imageSmoothingQuality="high";x.drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);c.toBlob(b=>b?res(b):rej(new Error("png")),"image/png")}catch(e){URL.revokeObjectURL(url);rej(e)}};
   img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error("img"))};img.src=url})}
 const X={fmt:"png",scale:2,bg:"light",data:null,name:"",tok:0,url:null};
 const kb=n=>n<1024*1024?`${Math.max(1,Math.round(n/1024))} KB`:`${(n/1048576).toFixed(1)} MB`;
 function segSet(id,v){$(id).querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.v===String(v)))}
+/* Refreshes the export dialog preview for the chosen format, size and background. */
 async function renderExport(){
   const tok=++X.tok;const info=$("x-info");info.className="msg";info.textContent="Drawing…";$("x-save").disabled=true;
   segSet("x-fmt",X.fmt);segSet("x-scale",X.scale);segSet("x-bg",X.bg);$("x-scale-row").hidden=X.fmt!=="png";
@@ -1627,6 +1810,8 @@ async function doExport(kind){
 
 /* ================= app glue: loading, saving, sharing, history ================= */
 let DOC=null,DOC_TITLE="Untitled diagram",lastSaved="",saveT=0,saving=false,again=false,conflict=false,dirty=false;
+/* fetch() wrapper for the JSON API. Throws an Error carrying .status. opts.stay: don't redirect to /login on 401.
+   opts.keepalive: let a small request finish while the tab is closing. */
 async function api(path,opts={}){
   const body=opts.body?JSON.stringify(opts.body):undefined;
   const r=await fetch(path,{method:opts.method||"GET",credentials:"same-origin",headers:{"Content-Type":"application/json","X-Requested-With":"untangle"},body,keepalive:!!opts.keepalive&&(!body||body.length<60000)});
@@ -1637,6 +1822,7 @@ async function api(path,opts={}){
 }
 function setStatus(text,cls){const el=$("save-status");el.textContent=text;el.className="save-status"+(cls?" "+cls:"")}
 function saveAlert(html){const el=$("save-alert");if(!html){el.hidden=true;el.innerHTML="";return}el.innerHTML=html;el.hidden=false}
+/* Called on every edit. Marks the document dirty and schedules flush(). Demo mode writes to localStorage. */
 function appSave(){
   if(MODE==="share"||!M)return;
   if(MODE==="demo"){store("untangle-demo",toMermaid());return}
@@ -1644,6 +1830,7 @@ function appSave(){
   dirty=true;clearTimeout(saveT);if(conflict){setStatus("Not saved","err");return}
   setStatus("Unsaved changes");saveT=setTimeout(()=>flush(false),900);
 }
+/* The dashboard preview image: a light-theme SVG export, or null if it would be too large. */
 async function makeThumb(){try{const t=(await buildExport("light")).text;return t.length<380000?t:null}catch(e){return null}}
 /* opts.force: overwrite a newer copy saved elsewhere. opts.unload: the tab is closing, so send at once without a preview. */
 async function flush(checkpoint,opts={}){
@@ -1678,6 +1865,7 @@ window.addEventListener("online",()=>{if(SAVES&&DOC&&dirty&&!conflict)flush(fals
 function shareUrl(){return DOC&&DOC.shareToken?`${location.origin}/s/${DOC.shareToken}`:""}
 function renderShare(){const on=!!(DOC&&DOC.shareToken);$("s-on").checked=on;$("s-link-row").hidden=!on;$("s-link").value=shareUrl();
   $("s-msg").className="msg";$("s-msg").textContent=on?"Anyone with this link can view, step through and export the diagram. They can't change it.":"Only you can see this diagram."}
+/* Share dialog. */
 async function openShare(){await flush(false);renderShare();$("smodal").hidden=false;$("s-on").focus()}
 $("s-on").onchange=async e=>{const want=e.target.checked;try{const r=await api(`/api/diagrams/${DOC.id}/share`,{method:"POST",body:{enabled:want}});DOC.shareToken=r.shareToken;renderShare()}catch(err){e.target.checked=!want;$("s-msg").className="msg err";$("s-msg").textContent=err.message}};
 $("s-copy").onclick=()=>{const t=shareUrl();try{navigator.clipboard.writeText(t).then(()=>{$("s-msg").className="msg ok";$("s-msg").textContent="Link copied."},()=>{$("s-link").select()})}catch(e){$("s-link").select()}};
@@ -1686,6 +1874,7 @@ $("s-close").onclick=()=>{$("smodal").hidden=true};
 /* ---- history dialog ---- */
 const when=t=>{const d=new Date(t),now=new Date();const same=d.toDateString()===now.toDateString();
   return (same?"Today":d.toLocaleDateString(undefined,{day:"numeric",month:"short",year:d.getFullYear()===now.getFullYear()?undefined:"numeric"}))+", "+d.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"})};
+/* Version history dialog. Restoring first saves the current state as its own version. */
 async function openHistory(){
   await flush(false);$("hmodal").hidden=false;const list=$("h-list");list.innerHTML=`<p class="msg">Loading…</p>`;
   try{const r=await api(`/api/diagrams/${DOC.id}/versions`);
@@ -1700,6 +1889,7 @@ $("h-close").onclick=()=>{$("hmodal").hidden=true};
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){$("smodal").hidden=true;$("hmodal").hidden=true}});
 
 /* ---- boot ---- */
+/* Entry point: sets the page up for the mode, loads the document, builds the model and draws it. */
 async function boot(){
   document.body.classList.add("mode-"+MODE);if(READONLY)document.body.classList.add("readonly");
   $("b-share").hidden=$("b-history").hidden=MODE!=="edit";$("doc-title").readOnly=MODE==="share"||LOCAL;

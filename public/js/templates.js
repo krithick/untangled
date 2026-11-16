@@ -1,4 +1,6 @@
-/* Starter diagrams shown on the dashboard and in the no-account demo. */
+/* Starter diagrams shown in the "New diagram" dialogs and the no-account demo.
+   Each entry: id (used in /demo?t=id), title, kind (label only), desc, source (Mermaid text).
+   To add one, append an entry; test/e2e/smoke.cjs opens every template and fails if one doesn't draw. */
 window.UNTANGLE_TEMPLATES=[
   {id:"flow",title:"Checkout flow",kind:"Flowchart",desc:"A 21-step food delivery checkout with decisions and notes. Try Walkthrough.",source:`flowchart TD
     start([Customer opens app]) --> browse[Browse restaurants]

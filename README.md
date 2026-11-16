@@ -97,6 +97,13 @@ writes a checked copy of the database to `DATA_DIR/backups` and keeps the newest
 - [ ] An uptime monitor watching `/healthz`
 - [ ] `npm audit` reviewed (2 low-severity KaTeX advisories remain until Mermaid 12)
 
+## Maintaining and extending
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): setup, conventions, where to make a change
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the pieces fit, storage format, database, security, known limits
+- [docs/EDITOR.md](docs/EDITOR.md): the editor's data model, rendering, gestures and layout
+- [docs/HOW-TO.md](docs/HOW-TO.md): recipes (add a template, a shape, a diagram type, an API route, a database change), upgrading, releasing, troubleshooting
+
 ## How it's built
 
 ```
@@ -117,6 +124,7 @@ public/
   fonts/         bundled fonts (no third-party requests)
 scripts/backup.js  database backup
 test/api.test.js, test/local.test.js   API tests        test/e2e/smoke.cjs   browser test
+docs/              architecture, editor internals and how-to guides
 ```
 
 Security: passwords are hashed with scrypt; sessions are random tokens stored hashed, in HttpOnly SameSite=Lax cookies; every API write needs a custom header, which blocks cross-site requests; logins, sign-ups, password resets and the API as a whole are rate limited; reset links work once, expire in 1 hour and log out every other session; pages send a strict Content-Security-Policy with no third-party hosts; preview images are served sandboxed.

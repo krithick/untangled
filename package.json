@@ -30,7 +30,9 @@
     "server",
     "public",
     "scripts",
-    "README.md"
+    "README.md",
+    "docs",
+    "CONTRIBUTING.md"
   ],
   "repository": {
     "type": "git",

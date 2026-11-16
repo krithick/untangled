@@ -1,3 +1,4 @@
+/* Account settings page (account.html): name, password, delete account. */
 import { api } from "/js/api.js";
 const $ = (id) => document.getElementById(id);
 const say = (id, text, ok) => { $(id).className = `msg ${ok ? "ok" : "err"}`; $(id).textContent = text; };

@@ -1,3 +1,5 @@
+/* Tests of local mode (server/local.js) against a temporary folder, including attempts to escape it.
+   Run with: npm test */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";

@@ -1,3 +1,28 @@
+/* The web app: every page and API route, built by createApp().
+   index.js reads the settings and calls createApp(); the tests call it with an in-memory database.
+
+   ORDER OF MIDDLEWARE (order matters)
+     request log → /healthz → gzip → security headers → session (sets req.user) → /api router → pages → static files → 404 → errors
+
+   API (all under /api, JSON in and out; every non-GET needs the header X-Requested-With: untangle)
+     POST   /auth/signup | /auth/login | /auth/logout | /auth/forgot | /auth/reset
+     GET    /session               who is logged in, or null (never 401; used by the landing page)
+     GET    /me    PATCH /me    POST /me/password    DELETE /me
+     GET    /export                every diagram of the account as one JSON download
+     GET    /diagrams              list           POST /diagrams           create
+     GET    /diagrams/:id          read           PUT  /diagrams/:id       save (409 if baseUpdatedAt is stale)
+     DELETE /diagrams/:id                         POST /diagrams/:id/duplicate
+     POST   /diagrams/:id/share    turn the share link on or off
+     GET    /diagrams/:id/versions      GET /diagrams/:id/versions/:vid      GET /diagrams/:id/thumb
+     GET    /share/:token          public read    POST /share/:token/copy  copy into my account
+
+   CONVENTIONS
+     - Handlers are wrapped in wrap() so a thrown error reaches the error handler at the bottom.
+     - fail(status, message) throws; the message is shown to the user, so write it for them.
+     - needUser(req) and ownDiagram(req) do the access checks. A diagram that isn't yours is a 404, not a 403,
+       so ids can't be probed.
+     - All SQL lives in the `q` object as prepared statements.
+   server/local.js implements the same /api/diagrams routes on top of files, for the `untangled` command. */
 import express from "express";
 import compression from "compression";
 import fs from "node:fs";
@@ -35,6 +60,7 @@ export function detectKind(source) {
   return "unknown";
 }
 
+/* An error with an HTTP status. Messages of 4xx errors are shown to the user as they are. */
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -57,6 +83,7 @@ export function createApp({ db, secureCookies = false, mailer = noMail, appUrl =
   app.set("trust proxy", 1);
   const startedAt = Date.now();
 
+  /* Every SQL statement the app runs, prepared once. Add new queries here. */
   const q = {
     userByEmail: db.prepare("SELECT * FROM users WHERE email = ?"),
     userById: db.prepare("SELECT id, email, name, created_at FROM users WHERE id = ?"),
@@ -143,6 +170,7 @@ export function createApp({ db, secureCookies = false, mailer = noMail, appUrl =
     next();
   });
 
+  /* Logs a user in: stores the hash of a random token and sends the token itself in an HttpOnly cookie. */
   function startSession(res, userId) {
     const token = newToken();
     const now = Date.now();
@@ -163,6 +191,7 @@ export function createApp({ db, secureCookies = false, mailer = noMail, appUrl =
     if (req.method !== "GET" && req.get("X-Requested-With") !== "untangle") return next(new HttpError(403, "Missing request header."));
     next();
   });
+  /* Access checks and input cleaning shared by the routes below. */
   const needUser = (req) => req.user || fail(401, "Please log in.");
   const ownDiagram = (req) => {
     const user = needUser(req);
@@ -181,6 +210,8 @@ export function createApp({ db, secureCookies = false, mailer = noMail, appUrl =
     id: d.id, title: d.title, kind: d.kind, source: d.source,
     shareToken: d.share_token || null, createdAt: d.created_at, updatedAt: d.updated_at,
   });
+  /* Version history: edits within VERSION_EVERY_MS of the last version overwrite it, so typing doesn't
+     create hundreds of versions. force = true always starts a new one (create, restore, "Keep my version"). */
   function addVersion(id, source, now, force) {
     const last = q.lastVersion.get(id);
     if (!force && last && now - last.created_at < VERSION_EVERY_MS) q.updateVersion.run(source, last.id);
@@ -405,6 +436,8 @@ export function createApp({ db, secureCookies = false, mailer = noMail, appUrl =
   }
 
   /* ---------- pages ---------- */
+  /* page: anyone. loggedIn: redirects to /login?next=... loggedOut: redirects logged-in users to /app.
+     editor.html serves three routes; its script picks the mode from the address (see MODE in editor.js). */
   const page = (file) => (req, res) => res.sendFile(path.join(PUBLIC, file));
   const loggedIn = (file) => (req, res) => req.user ? res.sendFile(path.join(PUBLIC, file)) : res.redirect(`/login?next=${encodeURIComponent(req.originalUrl)}`);
   const loggedOut = (file) => (req, res) => req.user ? res.redirect("/app") : res.sendFile(path.join(PUBLIC, file));

@@ -1,3 +1,4 @@
+/* Email. The app sends one kind of email today: the password reset link (see /auth/forgot in app.js). */
 import nodemailer from "nodemailer";
 
 /**

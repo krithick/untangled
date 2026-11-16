@@ -1,3 +1,10 @@
+/* Passwords, tokens, cookies and rate limiting. No database access here.
+   - Passwords: scrypt with a random salt, stored as "scrypt$N$salt$hash" so the cost can be raised later
+     without breaking old hashes (verifyPassword reads N from the stored value).
+   - Tokens (sessions, password resets, share links): random bytes. Only their SHA-256 is stored, so a leaked
+     database can't be used to log in.
+   - rateLimiter: counts per key in memory. It resets on restart and isn't shared between processes,
+     which is one reason the app must run as a single instance. */
 import crypto from "node:crypto";
 
 const SCRYPT = { N: 16384, r: 8, p: 1, keylen: 64 };

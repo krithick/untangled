@@ -1,6 +1,9 @@
+/* Tests of the web app's API. Each test starts from the shared in-memory database, with its own accounts.
+   client() returns a tiny HTTP client that keeps its own login cookie, so tests can act as several people.
+   Run with: npm test */
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { openDb } from "../server/db.js";
+import { openDb, migrate } from "../server/db.js";
 import { createApp, detectKind } from "../server/app.js";
 
 let server, base;
@@ -221,4 +224,20 @@ test("export, health check and security headers", async () => {
   assert.equal(r.headers.get("x-robots-tag"), null, "the landing page can be indexed");
   assert.match((await client()("GET", "/s/abc")).headers.get("x-robots-tag"), /noindex/);
   assert.match((await client()("GET", "/privacy")).body, /help@untangle\.test/);
+});
+
+test("database migrations run once each, in order, and a failing one changes nothing", () => {
+  const db = openDb(":memory:");
+  const version = () => db.prepare("PRAGMA user_version").get().user_version;
+  const columns = () => db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
+  const start = version();
+  const list = [...Array(start).fill("SELECT 1"), "ALTER TABLE users ADD COLUMN verified_at INTEGER"];
+  migrate(db, list);
+  assert.equal(version(), start + 1);
+  assert.ok(columns().includes("verified_at"));
+  migrate(db, list); // running again must not try to add the column twice
+  assert.equal(version(), start + 1);
+  assert.throws(() => migrate(db, [...list, "ALTER TABLE users ADD COLUMN nickname TEXT; ALTER TABLE nope ADD COLUMN x"]), /migration \d+ failed/);
+  assert.equal(version(), start + 1, "the version doesn't advance when a migration fails");
+  assert.ok(!columns().includes("nickname"), "a failed migration is rolled back completely");
 });

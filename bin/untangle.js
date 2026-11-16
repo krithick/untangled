@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+/* The `untangled` command (local mode). It only parses arguments, picks the folder and a free port,
+   and starts server/local.js. See "Use it on a Git repository" in the README. */
 /* Untangle local mode: edit the Mermaid files of a folder in your browser.
      untangled                 open the diagrams of the current folder
      untangled docs/erd.mmd    open (or create) one file

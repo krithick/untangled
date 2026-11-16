@@ -1,3 +1,5 @@
+/* Dashboard (app.html): the list of saved diagrams, search, upload, new-diagram dialog, rename / duplicate / delete.
+   `diagrams` holds the list from GET /api/diagrams; render() redraws the grid from it. */
 import { api, esc } from "/js/api.js";
 const $ = (id) => document.getElementById(id);
 const KIND = { er: "ER diagram", flow: "Flowchart", seq: "Sequence", sequenceDiagram: "Sequence", classDiagram: "Class", stateDiagram: "State", "stateDiagram-v2": "State", gantt: "Gantt", pie: "Pie chart", mindmap: "Mindmap", timeline: "Timeline", gitGraph: "Git graph", journey: "Journey", quadrantChart: "Quadrant" };
