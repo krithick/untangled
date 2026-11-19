@@ -184,14 +184,38 @@ Two rules:
 
 | Function | Used for |
 | --- | --- |
-| `layered()` | Tidy for flowcharts, state, class, and ER (default) |
-| `force()` | Tidy for ER when "Tidy style" is Organic |
+| `layered()` | Tidy, and the first layout of a file without saved positions. Despite the name it runs whichever arrangement is picked |
+| `layerUnits()` | The **Layered** arrangement: ranks, then ordering to reduce crossings |
+| `forceUnits()` | The **Organic** arrangement: force-directed |
+| `gridUnits()` | The **Grid** arrangement: even rows, most connected first |
 | `layoutGroups()` | Group boxes, every draw |
 | `seqLayout()` | Sequence diagrams, every draw |
 
 `layered()` works inside-out through `layoutScope(groupId)`: lay out the contents of the innermost groups, then treat each group as one block in its parent. The ranking and ordering are in `layerUnits()`. For ER, `flowDir()` orients each relationship from the "one" side to the "many" side so parents sit above children.
 
 Parts of a diagram with no connection between them are laid out separately and packed together by `packBoxes()`, so they can't drift apart.
+
+### Tidy options
+
+The arrow next to Tidy opens the Tidy menu. Its choices live in `TIDY`, saved in the browser's localStorage under `untangle-tidy` (they are a viewer preference, not part of the file):
+
+| Option | Values | Effect |
+| --- | --- | --- |
+| `style` | `layered`, `organic`, `grid` | `arrangeUnits()` calls `layerUnits()`, `forceUnits()` or `gridUnits()` |
+| `dir` | `TD`, `LR` | ER only (`tidyHoriz()`). Other kinds use the diagram's own direction, so the menu changes `M.dir`, which also changes the Mermaid code |
+| `space` | `compact`, `normal`, `roomy` | `tidySpace()` returns a factor (0.75, 1, 1.5) that scales every gap |
+
+All three arrangements take the same input, boxes `[{w, h}]` and connections `[[i, j]]`, and return top-left corners. That means they all work inside groups, through `layoutScope()`. A new arrangement only needs a function with that signature and a line in `arrangeUnits()`, plus a button in `#tidy-menu` in `editor.html`.
+
+### Line breaks in labels (`<br>`)
+
+Mermaid uses `<br>`, `<br/>` or `<br />` for a line break inside a label. The model keeps labels **exactly as written**, so a file round-trips unchanged. Only measuring and drawing treat the tag as a break:
+
+- `tw()` measures the widest line, `wrapText()` breaks at each tag before wrapping words, and `T()` draws one `<text>` per line.
+- In the side panel, `brToNl()` shows the tags as new lines and `nlToBr()` turns new lines back into `<br>`.
+- Where a label must fit on one line (panel headings, walkthrough choices, drop-down menus), use `oneLine()`.
+
+When you add a place that shows a label, use these helpers rather than the raw text.
 
 ## Mermaid-drawn types
 

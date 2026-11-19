@@ -1,4 +1,5 @@
-/* File list for local mode (the `untangled` command). */
+/* File list for local mode (the `untangled` command). Each entry is a .mmd file, or one ```mermaid block of a
+   Markdown file (f.block is set, f.path is "README.md#2" and f.title is "README.md · <nearest heading>"). */
 import { api, esc } from "/js/api.js";
 const $ = (id) => document.getElementById(id);
 const KIND = { er: "ER diagram", flow: "Flowchart", seq: "Sequence", classDiagram: "Class", stateDiagram: "State", "stateDiagram-v2": "State", gantt: "Gantt", pie: "Pie chart", mindmap: "Mindmap", timeline: "Timeline", gitGraph: "Git graph", journey: "Journey", quadrantChart: "Quadrant", unknown: "Mermaid" };
@@ -18,8 +19,9 @@ function render() {
   $("empty").hidden = files.length > 0;
   $("files").hidden = files.length === 0;
   $("files").innerHTML = list.length ? list.map((f) => {
-    const i = f.title.lastIndexOf("/");
-    return `<li><a href="${link(f.title)}"><span class="fname"><span class="fdir">${esc(f.title.slice(0, i + 1))}</span><b>${esc(f.title.slice(i + 1))}</b></span><span class="fmeta">${esc(KIND[f.kind] || f.kind)} · ${ago(f.updated_at)}</span></a></li>`;
+    const file = f.file || f.path || f.title, i = file.lastIndexOf("/");
+    const part = f.block ? `<span class="fblock">${esc(f.title.slice(file.length + 3))}</span>` : "";
+    return `<li><a href="${link(f.path || f.title)}"><span class="fname"><span class="fdir">${esc(file.slice(0, i + 1))}</span><b>${esc(file.slice(i + 1))}</b>${part}</span><span class="fmeta">${esc(KIND[f.kind] || f.kind)}${f.block ? " in Markdown" : ""} · ${ago(f.updated_at)}</span></a></li>`;
   }).join("") : `<li class="none">No files match "${esc(q)}".</li>`;
 }
 async function load() {
@@ -36,7 +38,7 @@ function openNew() {
   $("tpls").querySelectorAll("[data-tpl]").forEach((b) => b.onclick = async () => {
     const t = T.find((x) => x.id === b.dataset.tpl);
     $("new-msg").textContent = "";
-    try { const { diagram } = await api("/api/diagrams", { method: "POST", body: { title: $("new-name").value, source: t.source } }); location.href = link(diagram.title); }
+    try { const { diagram } = await api("/api/diagrams", { method: "POST", body: { title: $("new-name").value, source: t.source } }); location.href = link(diagram.path || diagram.title); }
     catch (e) { $("new-msg").className = "msg err"; $("new-msg").textContent = e.message; }
   });
   $("new-msg").textContent = ""; $("new-modal").hidden = false; $("new-name").focus(); $("new-name").select();
@@ -47,5 +49,6 @@ $("new-close").onclick = () => { $("new-modal").hidden = true; };
 $("new-modal").addEventListener("click", (e) => { if (e.target === $("new-modal")) $("new-modal").hidden = true; });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("new-modal").hidden = true; });
 $("search").oninput = render;
+{ const q = new URLSearchParams(location.search).get("q"); if (q) $("search").value = q; } // `untangled README.md` opens the list filtered to that file
 window.addEventListener("focus", load); // pick up files changed by Git or another editor
 load();

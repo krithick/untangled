@@ -1,18 +1,25 @@
 /* Local mode: edit the .mmd files of a folder (usually a Git repository) in place.
-   No accounts and no database: the files are the storage, and Git is the history. */
+   No accounts and no database: the files are the storage, and Git is the history.
+
+   Two kinds of diagram:
+     docs/erd.mmd       a whole .mmd or .mermaid file
+     README.md#2        the second ```mermaid block of a Markdown file (see server/markdown.js)
+   That path is the diagram's id. The browser sends it URL-encoded, so "#" arrives as %23. */
 import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { detectKind } from "./app.js";
+import { findMermaidBlocks, replaceBlock, blockHash } from "./markdown.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(here, "..", "public");
 const require = createRequire(import.meta.url);
 const MERMAID_FILE = require.resolve("mermaid/dist/mermaid.min.js");
 
-const EXT = /\.(mmd|mermaid)$/i;
+const EXT = /\.(mmd|mermaid)$/i, MD = /\.(md|markdown)$/i;
+const BLOCK_ID = /^(.+\.(?:md|markdown))#([1-9]\d{0,4})$/i;
 const SKIP_DIRS = new Set(["node_modules", "dist", "build", "out", "target", "vendor", "coverage"]);
 const MAX_FILES = 2000, MAX_DEPTH = 10, MAX_SIZE = 2_000_000;
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
@@ -21,7 +28,17 @@ class HttpError extends Error { constructor(status, message) { super(message); t
 const fail = (status, message) => { throw new HttpError(status, message); };
 const wrap = (fn) => (req, res, next) => { try { fn(req, res, next); } catch (e) { next(e); } };
 
-/** Lists diagram files under root, newest first. */
+/** What a diagram id names: { file, block } where block is null for a .mmd file. Doesn't check the file. */
+export function parseId(rel) {
+  rel = String(rel || "").replace(/\\/g, "/");
+  const m = BLOCK_ID.exec(rel);
+  return m ? { file: m[1], block: Number(m[2]) } : { file: rel, block: null };
+}
+/** The text shown for a Markdown diagram: "README.md · Checkout flow", or "README.md · diagram 2". */
+const blockTitle = (file, b, count) => `${file} · ${b.heading || (count > 1 ? `diagram ${b.index}` : "diagram")}`;
+
+/** Lists the diagrams under root, newest file first: every .mmd/.mermaid file, and every ```mermaid
+    block of every .md/.markdown file (one entry per block, rel = "README.md#2"). */
 export function listDiagramFiles(root) {
   const out = [];
   const walk = (dir, depth) => {
@@ -35,6 +52,16 @@ export function listDiagramFiles(root) {
       if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) walk(full, depth + 1); }
       else if (e.isFile() && EXT.test(e.name)) {
         try { const st = fs.statSync(full); out.push({ rel: path.relative(root, full).split(path.sep).join("/"), mtime: Math.round(st.mtimeMs), size: st.size }); } catch { /* unreadable: skip */ }
+      } else if (e.isFile() && MD.test(e.name)) {
+        try {
+          const st = fs.statSync(full);
+          if (st.size > MAX_SIZE) continue;
+          const text = fs.readFileSync(full, "utf8");
+          if (!/mermaid/i.test(text)) continue;
+          const file = path.relative(root, full).split(path.sep).join("/");
+          const blocks = findMermaidBlocks(text);
+          for (const b of blocks) out.push({ rel: `${file}#${b.index}`, file, block: b.index, title: blockTitle(file, b, blocks.length), source: b.source, mtime: Math.round(st.mtimeMs), size: b.source.length });
+        } catch { /* unreadable: skip */ }
       }
     }
   };
@@ -62,7 +89,7 @@ export function createLocalApp({ root }) {
   /** Turns a path from the browser into a safe absolute path inside root, or refuses. */
   function resolveFile(rel, { mustExist = true } = {}) {
     rel = String(rel || "").replace(/\\/g, "/");
-    if (!rel || rel.includes("\0") || !EXT.test(rel)) fail(400, "Only .mmd and .mermaid files can be opened.");
+    if (!rel || rel.includes("\0") || !(EXT.test(rel) || MD.test(rel))) fail(400, "Only .mmd, .mermaid and Markdown files can be opened.");
     if (rel.split("/").some((s) => s === ".." || s === "." || s === "" || s.startsWith("."))) fail(400, "That file path isn't allowed.");
     const full = path.resolve(root, rel);
     if (!full.startsWith(root + path.sep)) fail(400, "That file is outside this folder.");
@@ -79,20 +106,43 @@ export function createLocalApp({ root }) {
     return full;
   }
   const id = (rel) => encodeURIComponent(rel);
-  function readDiagram(rel) {
-    const full = resolveFile(rel);
+  function readText(full) {
     const st = fs.statSync(full);
     if (st.size > MAX_SIZE) fail(413, "This file is too large to open (over 2 MB).");
-    const source = fs.readFileSync(full, "utf8");
-    return { id: id(rel), title: rel, kind: detectKind(source), source, shareToken: null, createdAt: Math.round(st.birthtimeMs), updatedAt: Math.round(st.mtimeMs) };
+    return { st, text: fs.readFileSync(full, "utf8") };
   }
-  function writeFile(full, source) {
-    const text = source.replace(/\r\n/g, "\n").replace(/\s*$/, "") + "\n";
+  /** The ```mermaid block `n` of a Markdown file, with all the file's blocks. */
+  function readBlock(file, n) {
+    const full = resolveFile(file);
+    const { st, text } = readText(full);
+    const blocks = findMermaidBlocks(text);
+    return { full, st, text, blocks, block: blocks[n - 1] || null };
+  }
+  /** The diagram for an id, in the shape the editor expects (the same as the web app's API).
+      path is the id unencoded; Markdown diagrams add file, block and blockHash. */
+  function readDiagram(rel) {
+    const { file, block } = parseId(rel);
+    if (block === null) {
+      if (MD.test(file)) fail(400, "Pick one of this file's diagrams from the file list.");
+      const full = resolveFile(file);
+      const { st, text: source } = readText(full);
+      return { id: id(file), path: file, title: file, kind: detectKind(source), source, shareToken: null, createdAt: Math.round(st.birthtimeMs), updatedAt: Math.round(st.mtimeMs) };
+    }
+    const r = readBlock(file, block);
+    if (!r.block) fail(404, `${file} doesn't have a diagram number ${block} any more. It may have been removed.`);
+    const b = r.block, rel2 = `${file}#${b.index}`;
+    return { id: id(rel2), path: rel2, title: blockTitle(file, b, r.blocks.length), file, block: b.index, blockHash: blockHash(b.source),
+      kind: detectKind(b.source), source: b.source, shareToken: null, createdAt: Math.round(r.st.birthtimeMs), updatedAt: Math.round(r.st.mtimeMs) };
+  }
+  /** Writes text exactly as given, replacing the file in one step so a crash can't leave half a file. */
+  function writeRaw(full, text) {
     fs.mkdirSync(path.dirname(full), { recursive: true });
     const tmp = `${full}.untangle-${process.pid}.tmp`;
     fs.writeFileSync(tmp, text);
-    fs.renameSync(tmp, full); // replace in one step, so a crash can't leave half a file
+    fs.renameSync(tmp, full);
   }
+  /** A whole .mmd file: normalised to \n line endings and one final newline. */
+  const writeFile = (full, source) => writeRaw(full, source.replace(/\r\n/g, "\n").replace(/\s*$/, "") + "\n");
 
   const api = express.Router();
   api.use(express.json({ limit: "4mb" }));
@@ -103,14 +153,16 @@ export function createLocalApp({ root }) {
   api.get("/diagrams", wrap((req, res) => {
     const diagrams = listDiagramFiles(root).map((f) => {
       let kind = "unknown";
-      try { if (f.size <= MAX_SIZE) kind = detectKind(fs.readFileSync(path.join(root, f.rel), "utf8").slice(0, 4000)); } catch { /* keep unknown */ }
-      return { id: id(f.rel), title: f.rel, kind, shared: false, has_thumb: false, created_at: f.mtime, updated_at: f.mtime };
+      if (!f.block) try { if (f.size <= MAX_SIZE) kind = detectKind(fs.readFileSync(path.join(root, f.rel), "utf8").slice(0, 4000)); } catch { /* keep unknown */ }
+      if (f.block) return { id: id(f.rel), path: f.rel, title: f.title, file: f.file, block: f.block, kind: detectKind(f.source.slice(0, 4000)), shared: false, has_thumb: false, created_at: f.mtime, updated_at: f.mtime };
+      return { id: id(f.rel), path: f.rel, title: f.rel, kind, shared: false, has_thumb: false, created_at: f.mtime, updated_at: f.mtime };
     });
     res.json({ diagrams, root, name: path.basename(root) });
   }));
   api.post("/diagrams", wrap((req, res) => {
     let rel = String(req.body.title || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
     if (!rel) fail(400, "Give the file a name, for example docs/checkout.mmd.");
+    if (MD.test(rel)) fail(400, "New diagrams are saved as .mmd files. To add one to a Markdown file, add a ```mermaid block to it.");
     if (!EXT.test(rel)) rel += ".mmd";
     const full = resolveFile(rel, { mustExist: false });
     if (fs.existsSync(full)) fail(409, `${rel} already exists. Pick another name.`);
@@ -122,11 +174,12 @@ export function createLocalApp({ root }) {
   api.get("/diagrams/:id", wrap((req, res) => res.json({ diagram: readDiagram(req.params.id) })));
   api.put("/diagrams/:id", wrap((req, res) => {
     const rel = req.params.id;
-    const before = readDiagram(rel);
     const source = req.body.source;
+    if (source !== undefined && (typeof source !== "string" || !source.trim())) fail(400, "The diagram is empty.");
+    if (source !== undefined && source.length > MAX_SIZE) fail(413, "This diagram is too large to save (over 2 MB).");
+    if (parseId(rel).block !== null) return saveBlock(rel, source, req.body, res);
+    const before = readDiagram(rel);
     if (source === undefined) return res.json({ diagram: before });
-    if (typeof source !== "string" || !source.trim()) fail(400, "The diagram is empty.");
-    if (source.length > MAX_SIZE) fail(413, "This diagram is too large to save (over 2 MB).");
     const same = source.replace(/\s*$/, "") === before.source.replace(/\r\n/g, "\n").replace(/\s*$/, "");
     const base = req.body.baseUpdatedAt;
     if (!same && typeof base === "number" && base !== before.updatedAt) {
@@ -135,6 +188,29 @@ export function createLocalApp({ root }) {
     if (!same) writeFile(resolveFile(rel), source);
     res.json({ diagram: readDiagram(rel) });
   }));
+  /* Saving a diagram inside a Markdown file. The editor sends blockHash, the fingerprint of the block as it
+     opened it. Only that block's lines are rewritten, into the file as it is now, so changes elsewhere in
+     the file (by Git or another editor) are kept and are not a conflict. A conflict is when the block itself
+     changed. If lines were added above it, the block is found again by its fingerprint. */
+  function saveBlock(rel, source, body, res) {
+    const { file, block } = parseId(rel);
+    const r = readBlock(file, block);
+    const base = typeof body.baseBlock === "string" ? body.baseBlock : null;
+    const force = typeof body.baseUpdatedAt !== "number"; // "Keep my version" saves without baseUpdatedAt
+    let target = r.block;
+    if (base && (!target || blockHash(target.source) !== base)) {
+      const moved = r.blocks.filter((b) => blockHash(b.source) === base);
+      if (moved.length === 1) target = moved[0];
+      else if (!force) return res.status(409).json({ error: "This diagram was changed in the file since you opened it.", updatedAt: Math.round(r.st.mtimeMs) });
+    }
+    if (!target) fail(404, `${file} doesn't have a diagram number ${block} any more. It may have been removed.`);
+    const relNow = `${file}#${target.index}`;
+    if (source === undefined || source.replace(/\s+$/, "") === target.source.replace(/\s+$/, "")) return res.json({ diagram: readDiagram(relNow) });
+    let text;
+    try { text = replaceBlock(r.text, target, source); } catch (e) { fail(400, e.message); }
+    writeRaw(r.full, text);
+    res.json({ diagram: readDiagram(relNow) });
+  }
   api.use((req, res) => res.status(404).json({ error: "Not found." }));
   app.use("/api", api);
 

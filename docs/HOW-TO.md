@@ -36,7 +36,7 @@ npm run test:e2e
 | --- | --- |
 | `npm install` | Installs dependencies (once, and after pulling changes to `package.json`) |
 | `npm run dev` | Runs the web app at http://localhost:3000 and restarts it when server files change |
-| `npm run local` | Runs local mode on this folder's `.mmd` files (add a path: `npm run local -- docs/x.mmd`) |
+| `npm run local` | Runs local mode on this folder's `.mmd` files and Markdown diagrams (add a path: `npm run local -- docs/x.mmd` or `-- README.md`) |
 | `npm test` | API tests for the web app and local mode |
 | `npm run test:e2e` | Browser test. Needs Playwright once: `npm install --no-save playwright && npx playwright install chromium` |
 | `npm run backup` | Backs up the database |
@@ -221,7 +221,7 @@ Check for security advisories with `npm audit --omit=dev`, and apply safe fixes 
 
 ## 13. Write tests
 
-**API tests** (`test/api.test.js`, `test/local.test.js`) use Node's built-in test runner.
+**API and unit tests** (`test/api.test.js`, `test/local.test.js`, `test/markdown.test.js`) use Node's built-in test runner.
 
 ```js
 test("starring a diagram", async () => {

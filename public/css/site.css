@@ -165,6 +165,8 @@ footer.foot{border-top:1px solid var(--line);padding-block:24px 40px;color:var(-
 .files a:hover,.files a:focus-visible{background:var(--accent-soft)}
 .files .fname{font-family:var(--mono);font-size:13.5px;min-width:0;word-break:break-all}
 .files .fdir{color:var(--muted)}
+.files .fblock{font-family:var(--ui);font-size:13px;color:var(--muted);word-break:normal}
+.files .fblock::before{content:" · "}
 .files .fmeta{font-size:12.5px;color:var(--muted);white-space:nowrap}
 .files .none{padding:12px 16px;color:var(--muted)}
 

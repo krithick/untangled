@@ -84,10 +84,23 @@ const svg=$("svg"),world=$("world"),stage=$("stage"),inline=$("inline");
 const cv=document.createElement("canvas").getContext("2d");
 const FT={title:`600 13px ${SYS}`,type:`400 11.5px ${MONO}`,name:`400 12.5px ${SYS}`,key:`600 10.5px ${MONO}`,lbl:`400 11.5px ${SYS}`,node:`500 13px ${SYS}`};
 let EXPORTING=false;
-/* text element; in exports, textLength pins each label to its measured width so it can't spill out of its box on another computer */
-function T(cls,x,y,s,font,anchor){const fit=EXPORTING&&s?` textLength="${tw(s,font).toFixed(1)}" lengthAdjust="spacingAndGlyphs"`:"";return `<text class="${cls}" x="${x}" y="${y}"${anchor?` text-anchor="${anchor}"`:""}${fit}>${esc(s)}</text>`}
-/* Width in px of string s in font FT[f], measured on an off-screen canvas. All box sizes come from this. */
-function tw(s,f){cv.font=FT[f];return cv.measureText(s).width}
+/* text element; in exports, textLength pins each label to its measured width so it can't spill out of its box on another computer.
+   A label with <br> tags is drawn as several lines: centred on y, or, with grow "up", ending at y (sequence messages). */
+function T(cls,x,y,s,font,anchor,grow){
+  const parts=brLines(s),fit=p=>EXPORTING&&p?` textLength="${tw(p,font).toFixed(1)}" lengthAdjust="spacingAndGlyphs"`:"";
+  const open=yy=>`<text class="${cls}" x="${x}" y="${yy}"${anchor?` text-anchor="${anchor}"`:""}`;
+  if(parts.length===1)return `${open(y)}${fit(s)}>${esc(s)}</text>`;
+  const lh=LINE_H[font]||16,y0=y-(grow==="up"?parts.length-1:(parts.length-1)/2)*lh;
+  return parts.map((p,i)=>`${open(y0+i*lh)}${fit(p)}>${esc(p)}</text>`).join("")}
+/* Mermaid's line break inside a label. Labels keep the tag exactly as written, so files round-trip unchanged;
+   only measuring and drawing treat it as a new line. oneLine() is for places that show a label on one line. */
+const BR=/<br\s*\/?>/gi,HAS_BR=/<br\s*\/?>/i,LINE_H={lbl:15,node:17,name:16,title:17,type:15,key:14};
+const brLines=s=>String(s??"").split(BR),oneLine=s=>String(s??"").replace(BR," ");
+/* The inspector edits a label with real new lines; these convert between the two forms. */
+const brToNl=s=>String(s??"").replace(BR,"\n"),nlToBr=s=>String(s??"").replace(/\r?\n/g,"<br>");
+/* Width in px of string s in font FT[f], measured on an off-screen canvas. All box sizes come from this.
+   For a label with <br> it is the widest line. */
+function tw(s,f){cv.font=FT[f];s=String(s??"");if(!HAS_BR.test(s))return cv.measureText(s).width;return Math.max(...s.split(BR).map(p=>cv.measureText(p).width))}
 /* localStorage: store(key) reads, store(key, value) writes. Never throws (private windows, blocked storage). */
 function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
 let toastT=0;function toast(msg){const t=$("toast");t.textContent=msg;t.hidden=false;clearTimeout(toastT);toastT=setTimeout(()=>{t.hidden=true},2600)}
@@ -202,7 +215,7 @@ let history=[];
 const byId=id=>M.nodes.find(n=>n.id===id);
 const byKey=k=>M.nodes.find(n=>n.key===k);
 const isGroup=n=>!!n&&n.shape==="group";
-const nodeLabel=n=>!n?"":M.kind==="er"||M.kind==="class"?(isGroup(n)?n.text||n.key:n.key):n.shape==="start"?"Start":n.shape==="end"?"End":(n.text||n.key);
+const nodeLabel=n=>!n?"":M.kind==="er"||M.kind==="class"?(isGroup(n)?n.text||n.key:n.key):n.shape==="start"?"Start":n.shape==="end"?"End":oneLine(n.text||n.key);
 
 const stripFront=src=>src.replace(/^\s*---\r?\n[\s\S]*?\r?\n---[ \t]*\r?\n/,"");
 /* First meaningful word of the source, which is the Mermaid diagram keyword. */
@@ -541,8 +554,9 @@ function uniqueKey(base,except){let n=base,i=2;while(M.nodes.some(e=>e.key===n&&
 const cleanName=s=>s.trim().replace(/\s+/g,"_").replace(/[^\w-]/g,"").toUpperCase();
 
 /* ================= geometry ================= */
-function wrapText(s,max){const words=String(s||" ").split(/\s+/);const out=[];let line="";
-  words.forEach(w=>{const t=line?line+" "+w:w;if(tw(t,"node")>max&&line){out.push(line);line=w}else line=t});out.push(line);return out}
+/* Splits text into lines no wider than max: first at each <br>, then between words. */
+function wrapText(s,max){const out=[];brLines(s||" ").forEach(par=>{const words=par.trim().split(/\s+/);let line="";
+  words.forEach(w=>{const t=line?line+" "+w:w;if(tw(t,"node")>max&&line){out.push(line);line=w}else line=t});out.push(line)});return out}
 /* Sets n.w and n.h (and wrapped text lines) from the node's content. Runs for every node before each draw. */
 function measure(n){
   if(isGroup(n))return;
@@ -694,7 +708,7 @@ function renderInner(plain){
     let marks="";
     if(M.kind==="er")marks=crowMarker(g.pA,g.uA,r.ka)+crowMarker(g.pB,g.uB,r.kb);else if(M.kind==="class")marks=classMarks(g,r);else if(r.arrow)marks=arrowHead(g.pB,g.uB);
     let lab="";
-    if(r.label){const lw=tw(r.label,"lbl")+16;lab=`<g class="lbl" data-hit="label:${i}"><rect x="${g.H.x-lw/2}" y="${g.H.y-10}" width="${lw}" height="20" rx="10"/>${T("lbl-t",g.H.x,g.H.y+4,r.label,"lbl","middle")}</g>`}
+    if(r.label){const lw=tw(r.label,"lbl")+16,lh=20+(brLines(r.label).length-1)*LINE_H.lbl;lab=`<g class="lbl" data-hit="label:${i}"><rect x="${g.H.x-lw/2}" y="${g.H.y-lh/2}" width="${lw}" height="${lh}" rx="10"/>${T("lbl-t",g.H.x,g.H.y+4,r.label,"lbl","middle")}</g>`}
     else if(!plain)lab=`<circle class="knob" data-hit="label:${i}" cx="${g.H.x}" cy="${g.H.y}" r="6"/>`;
     out+=`<g class="${cls}">${plain?"":`<path class="edge-hit" data-hit="rel:${i}" d="${g.path}"/>`}<path class="edge-line" d="${g.path}"/>${marks}</g>`;
     if(lab)labs+=`<g class="${cls}">${lab}</g>`;
@@ -822,13 +836,13 @@ function layerUnits(U,E,horiz){
       const bc=v=>nb(v).length?nb(v).reduce((t,u)=>t+pos[u],0)/nb(v).length:pos[v];
       L.sort((x,y)=>bc(x)-bc(y));L.forEach((v,j)=>{pos[v]=j})})}
   const P=U.map(()=>({x:0,y:0}));let along=0;
-  const GAPX=horiz?36:50,GAPL=horiz?100:90,len=v=>horiz?U[v].h:U[v].w,thk=v=>horiz?U[v].w:U[v].h;
+  const sp=tidySpace(),GAPX=(horiz?36:50)*sp,GAPL=(horiz?100:90)*sp,len=v=>horiz?U[v].h:U[v].w,thk=v=>horiz?U[v].w:U[v].h;
   const maxRow=Math.max(1400,Math.sqrt(U.reduce((t,u)=>t+(u.w+60)*(u.h+90),0))*1.7);
   layers.forEach(L=>{if(!L)return;
     const rows=[[]];let used=0;L.forEach(v=>{if(rows[rows.length-1].length&&used+len(v)>maxRow){rows.push([]);used=0}rows[rows.length-1].push(v);used+=len(v)+GAPX});
     rows.forEach((row,ri)=>{const thick=Math.max(...row.map(thk));const total=row.reduce((t,v)=>t+len(v),0)+(row.length-1)*GAPX;let across=-total/2;
       row.forEach(v=>{const u=U[v];if(horiz){P[v]={x:along+(thick-u.w)/2,y:across};across+=u.h+GAPX}else{P[v]={x:across,y:along+(thick-u.h)/2};across+=u.w+GAPX}});
-      along+=thick+(ri<rows.length-1?40:GAPL)})});
+      along+=thick+(ri<rows.length-1?40*sp:GAPL)})});
   return {pos:P,back};
 }
 let BACK=new Set();
@@ -845,20 +859,21 @@ function layoutScope(gid,horiz){
   const comps=gid===null?compsOf(units.length,E):[];
   if(comps.length>1){
     comps.forEach(ci=>{const loc=new Map(ci.map((g,k)=>[g,k]));const sub=[],subW=[];E.forEach(([x,y],j)=>{if(loc.has(x)&&loc.has(y)){sub.push([loc.get(x),loc.get(y)]);subW.push(which[j])}});
-      const r=layerUnits(ci.map(i=>({w:units[i].w||100,h:units[i].h||40})),sub,horiz);ci.forEach((ui,k)=>place(units[ui],r.pos[k]));
+      const r=arrangeUnits(ci.map(i=>({w:units[i].w||100,h:units[i].h||40})),sub,horiz);ci.forEach((ui,k)=>place(units[ui],r.pos[k]));
       sub.forEach(([x,y],j)=>{if(r.back.has(x+">"+y))BACK.add(subW[j])})});
     layoutGroups();
-    packBoxes(comps.map(ci=>{const us=ci.map(i=>units[i]);return boxOf(us,(dx,dy)=>us.forEach(u=>shiftUnit(u,dx,dy)))}),90);
+    packBoxes(comps.map(ci=>{const us=ci.map(i=>units[i]);return boxOf(us,(dx,dy)=>us.forEach(u=>shiftUnit(u,dx,dy)))}),90*tidySpace());
     layoutGroups();return}
-  const {pos,back}=layerUnits(units.map(u=>({w:u.w||100,h:u.h||40})),E,horiz);
+  const {pos,back}=arrangeUnits(units.map(u=>({w:u.w||100,h:u.h||40})),E,horiz);
   units.forEach((u,i)=>{if(isGroup(u)){const dx=pos[i].x-(u.x||0),dy=pos[i].y-(u.y||0);descendants(u.id).forEach(c=>{if(!isGroup(c)){c.x+=dx;c.y+=dy}})}else{u.x=pos[i].x;u.y=pos[i].y}});
   layoutGroups();
   E.forEach(([a,b],j)=>{if(back.has(a+">"+b))BACK.add(which[j])});
 }
-/* Tidy for flowcharts, state and class diagrams, and ER diagrams (the "one" side above the "many" side). */
+/* Tidy for flowcharts, state and class diagrams, and ER diagrams (the "one" side above the "many" side),
+   using the arrangement, direction and spacing picked in the Tidy menu (TIDY). */
 function layered(){
   if(!M.nodes.length)return;M.nodes.forEach(measure);
-  const horiz=M.dir==="LR"||M.dir==="RL";BACK=new Set();
+  const horiz=tidyHoriz();BACK=new Set();
   M.nodes.forEach(n=>{if(isNaN(n.x)||n.x===undefined){n.x=0;n.y=0}});
   layoutScope(null,horiz);layoutGroups();
   let mx=1e9,my=1e9;M.nodes.forEach(v=>{mx=Math.min(mx,v.x);my=Math.min(my,v.y)});
@@ -868,37 +883,58 @@ function layered(){
   M.edges.forEach((e,k)=>{const a=byId(e.a),b=byId(e.b);if(!a||!b||a===b||!BACK.has(k))return;
     const off=horiz?{dx:0,dy:Math.max(a.h,b.h)/2+60}:{dx:Math.max(a.w,b.w)/2+70,dy:0};e.bend=off});
 }
-/* Force-directed layout of one connected set of nodes. */
-function forceComp(N){
-  const n=N.length,idx=new Map(N.map((e,i)=>[e.id,i]));
-  const avg=N.reduce((t,e)=>t+Math.sqrt(e.w*e.h),0)/Math.max(1,n);const K=Math.max(90,Math.min(200,avg*1.5));
-  const P=N.map((e,i)=>({x:Math.cos(i*2.4)*K*0.7*Math.sqrt(i+1),y:Math.sin(i*2.4)*K*0.7*Math.sqrt(i+1)}));
-  if(n>1)for(let it=0;it<500;it++){
+/* ---- Tidy options ----
+   TIDY is the viewer's choice in the Tidy menu, kept in this browser (not in the file):
+     style  "layered" (follow the arrows) | "organic" (pull related boxes together) | "grid" (even rows)
+     dir    "TD" | "LR": only used for ER diagrams; the others use the diagram's own direction (M.dir)
+     space  "compact" | "normal" | "roomy" */
+const TIDY=Object.assign({style:"layered",dir:"TD",space:"normal"},(()=>{try{return JSON.parse(store("untangle-tidy")||"{}")}catch(e){return {}}})());
+const tidySpace=()=>({compact:0.75,normal:1,roomy:1.5})[TIDY.space]||1;
+const tidyHoriz=()=>M.kind==="er"?TIDY.dir==="LR":(M.dir==="LR"||M.dir==="RL");
+/* Places boxes U = [{w, h}] connected by E = [[i, j]] (indexes into U) and returns {pos: top-left corners, back}.
+   back holds the lines the layered layout had to reverse to break cycles; they get a bend so they stay visible. */
+function arrangeUnits(U,E,horiz){
+  if(TIDY.style==="organic")return {pos:forceUnits(U,E),back:new Set()};
+  if(TIDY.style==="grid")return {pos:gridUnits(U,E,horiz),back:new Set()};
+  return layerUnits(U,E,horiz);
+}
+/* Organic: a force-directed layout. Lines pull their ends together, all boxes push each other apart, then
+   any remaining overlaps are pushed out. */
+function forceUnits(U,E){
+  const n=U.length,sp=tidySpace();if(n===1)return [{x:0,y:0}];
+  const avg=U.reduce((t,u)=>t+Math.sqrt(u.w*u.h),0)/Math.max(1,n);const K=Math.max(90,Math.min(200,avg*1.5))*sp;
+  const P=U.map((u,i)=>({x:Math.cos(i*2.4)*K*0.7*Math.sqrt(i+1),y:Math.sin(i*2.4)*K*0.7*Math.sqrt(i+1)}));
+  for(let it=0;it<500;it++){
     const D=P.map(p=>({x:-p.x*0.06*Math.sqrt(n),y:-p.y*0.06*Math.sqrt(n)}));
     for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){let dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.max(1,Math.hypot(dx,dy));const f=K*K/d;D[i].x+=dx/d*f;D[i].y+=dy/d*f;D[j].x-=dx/d*f;D[j].y-=dy/d*f}
-    M.edges.forEach(r=>{const i=idx.get(r.a),j=idx.get(r.b);if(i===j||i===undefined||j===undefined)return;let dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.max(1,Math.hypot(dx,dy));const f=d*d/K;D[i].x-=dx/d*f;D[i].y-=dy/d*f;D[j].x+=dx/d*f;D[j].y+=dy/d*f});
+    E.forEach(([i,j])=>{if(i===j)return;let dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.max(1,Math.hypot(dx,dy));const f=d*d/K;D[i].x-=dx/d*f;D[i].y-=dy/d*f;D[j].x+=dx/d*f;D[j].y+=dy/d*f});
     const T=80*(1-it/500)+1;P.forEach((p,i)=>{const d=Math.hypot(D[i].x,D[i].y)||1;p.x+=D[i].x/d*Math.min(d,T);p.y+=D[i].y/d*Math.min(d,T)});
   }
+  const gap=50*sp;
   for(let pass=0;pass<80;pass++){let moved=false;
-    for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){const a=N[i],b=N[j],gap=50;
+    for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){const a=U[i],b=U[j];
       const ox=(a.w+b.w)/2+gap-Math.abs(P[i].x-P[j].x),oy=(a.h+b.h)/2+gap-Math.abs(P[i].y-P[j].y);
       if(ox>0&&oy>0){moved=true;if(ox<oy){const s=P[i].x<P[j].x?-1:1;P[i].x+=s*ox/2;P[j].x-=s*ox/2}else{const s=P[i].y<P[j].y?-1:1;P[i].y+=s*oy/2;P[j].y-=s*oy/2}}}
     if(!moved)break}
-  N.forEach((e,i)=>{e.x=P[i].x-e.w/2;e.y=P[i].y-e.h/2});
+  return P.map((p,i)=>({x:p.x-U[i].w/2,y:p.y-U[i].h/2}));
 }
-/* Organic layout: forceComp() for each connected part, then packBoxes(). Used for ER when Tidy style is Organic. */
-function force(){
-  const all=M.nodes;if(!all.length)return;all.forEach(measure);const idx=new Map(all.map((e,i)=>[e.id,i]));
-  const E=[];M.edges.forEach(r=>{const i=idx.get(r.a),j=idx.get(r.b);if(i!==undefined&&j!==undefined&&i!==j)E.push([i,j])});
-  const comps=compsOf(all.length,E).map(ci=>ci.map(i=>all[i]));
-  comps.forEach(forceComp);
-  packBoxes(comps.map(ns=>boxOf(ns,(dx,dy)=>ns.forEach(n=>{n.x+=dx;n.y+=dy}))),90);
-  let mx=1e9,my=1e9;all.forEach(n=>{mx=Math.min(mx,n.x);my=Math.min(my,n.y)});
-  all.forEach(n=>{n.x=Math.round((n.x-mx+60)/10)*10;n.y=Math.round((n.y-my+60)/10)*10});
-  M.edges.forEach(r=>r.bend=null);
+/* Grid: even rows (columns when horiz), starting from the most connected box and then walking outwards
+   through its neighbours, so connected boxes tend to sit next to each other. */
+function gridUnits(U,E,horiz){
+  const n=U.length,sp=tidySpace(),nb=U.map(()=>[]);E.forEach(([a,b])=>{if(a!==b){nb[a].push(b);nb[b].push(a)}});
+  const deg=i=>nb[i].length,order=[],seen=new Set();
+  const byDeg=[...U.keys()].sort((a,b)=>deg(b)-deg(a)||a-b);
+  byDeg.forEach(s0=>{if(seen.has(s0))return;const q=[s0];seen.add(s0);
+    while(q.length){const v=q.shift();order.push(v);nb[v].slice().sort((a,b)=>deg(b)-deg(a)).forEach(w=>{if(!seen.has(w)){seen.add(w);q.push(w)}})}});
+  const per=Math.max(1,Math.ceil(Math.sqrt(n*1.3)));/* boxes per row (or per column when horiz) */
+  const cell=order.map((v,k)=>({v,r:horiz?k%per:Math.floor(k/per),c:horiz?Math.floor(k/per):k%per}));
+  const colW=[],rowH=[];cell.forEach(({v,r,c})=>{colW[c]=Math.max(colW[c]||0,U[v].w);rowH[r]=Math.max(rowH[r]||0,U[v].h)});
+  const gx=90*sp,gy=100*sp,X=[0],Y=[0];colW.forEach((w,c)=>X[c+1]=X[c]+w+gx);rowH.forEach((h,r)=>Y[r+1]=Y[r]+h+gy);
+  const P=new Array(n);cell.forEach(({v,r,c})=>{P[v]={x:X[c]+(colW[c]-U[v].w)/2,y:Y[r]+(rowH[r]-U[v].h)/2}});
+  return P;
 }
 /* The Tidy button. */
-function tidy(){mutate(()=>{if(M.kind==="er"&&M.tidyStyle==="organic")force();else layered()});fit()}
+function tidy(){mutate(()=>layered());fit()}
 
 /* ================= pointer interaction ================= */
 /* drag = the gesture in progress: {mode: node | group | bend | pan | seqcol | seqrow | seqend, ...}.
@@ -1050,7 +1086,7 @@ function parseSeq(src){
     let m=t.match(/^title\s*:?\s*(.*)$/i);if(m){title=m[1].trim();return}
     m=t.match(/^(participant|actor)\s+(\S+?)(?:\s+as\s+(.+))?$/);if(m){ensure(m[2],m[1],m[3]&&m[3].trim());return}
     m=t.match(/^note\s+(left of|right of|over)\s+([^\s,:]+)(?:\s*,\s*([^\s:]+))?\s*:\s*(.*)$/i);
-    if(m){ensure(m[2]);if(m[3])ensure(m[3]);items.push({t:"note",pos:m[1].toLowerCase(),a:m[2],b:m[3]||null,label:m[4].replace(/<br\s*\/?>/gi," ")});return}
+    if(m){ensure(m[2]);if(m[3])ensure(m[3]);items.push({t:"note",pos:m[1].toLowerCase(),a:m[2],b:m[3]||null,label:m[4]});return}
     m=t.match(/^([^\s:<>+\-]+?)\s*(-->>|->>|-->|->|--x|-x|--\)|-\))\s*([+-]?)\s*([^\s:<>+\-]+?)\s*:\s*(.*)$/);
     if(m){ensure(m[1]);ensure(m[4]);items.push({t:"msg",a:m[1],b:m[4],arrow:m[2],act:m[3],label:m[5]});return}
     m=t.match(/^(loop|alt|opt|par|critical|break|rect)\b\s*(.*)$/);if(m){items.push({t:"open",kind:m[1],label:m[2].trim()});depth++;return}
@@ -1105,7 +1141,7 @@ function seqLayout(){
     if(e.t==="act"){rows.push({y:y+2,h:12});y+=14;return}
     if(!cx.has(e.a)){rows.push({y,h:0});return}
     if(e.t==="note"){e._nb=noteBox(e,cx);e._lines=wrapText(e.label,e._nb.x1-e._nb.x0-22);const h=e._lines.length*16+16;rows.push({y:y+4,h});y+=h+20}
-    else{const h=e.a===e.b?60:46;rows.push({y:y+h-14,h});y+=h}});
+    else{const h=(e.a===e.b?60:46)+(brLines(e.label).length-1)*LINE_H.lbl;rows.push({y:y+h-14,h});y+=h}});
   M._seq={cx,rows,head,bottom:y+26};
 }
 function crossAt(p,u){const c={x:p.x+u.x*7,y:p.y+u.y*7};return `<path class="mk" d="M${c.x-5} ${c.y-5}L${c.x+5} ${c.y+5}M${c.x-5} ${c.y+5}L${c.x+5} ${c.y-5}"/>`}
@@ -1164,7 +1200,7 @@ function renderSeq(plain){
     const hit=self?`<rect class="row-hit" data-hit="rel:${i}" x="${xa}" y="${y-34}" width="${Math.max(70,lw+64)}" height="48"/>`
       :`<rect class="row-hit" data-hit="rel:${i}" x="${Math.min(xa,xb)}" y="${y-26}" width="${Math.max(20,Math.abs(xb-xa))}" height="36"/>`;
     const ends=plain||self?"":`<circle class="end-knob" data-hit="end:${i}:a" cx="${xa}" cy="${y}" r="7"/><circle class="end-knob" data-hit="end:${i}:b" cx="${xb}" cy="${y}" r="7"/>`;
-    out+=`<g class="${cls}${dashed?" dashed":""}">${plain?"":hit}<path class="edge-line" d="${path}"/>${marks}${T("lbl-seq",tx,ty,e.label,"lbl",self?"start":"middle")}${numB}${ends}</g>`;
+    out+=`<g class="${cls}${dashed?" dashed":""}">${plain?"":hit}<path class="edge-line" d="${path}"/>${marks}${T("lbl-seq",tx,ty,e.label,"lbl",self?"start":"middle","up")}${numB}${ends}</g>`;
   });
   return out+heads;
 }
@@ -1223,18 +1259,18 @@ function seqWalkPanel(){
   pane.innerHTML=`<p class="eyebrow">Walkthrough · step ${k+1} of ${st.length}</p>
     ${inside.length?`<p class="msg" style="color:var(--muted)">Inside: ${inside.map(esc).join(" › ")}</p>`:""}
     <div class="card-sm">${e.t==="note"?`<span>Note ${esc(e.pos)}</span><b>${esc(A.text)}</b>${B?`<span>and</span><b>${esc(B.text)}</b>`:""}`:`<b>${esc(A.text)}</b><span>→</span><b>${esc(B.text)}</b>`}</div>
-    <p class="walk-now">${esc(e.label)}</p>
+    <p class="walk-now">${esc(oneLine(e.label))}</p>
     ${e.t==="msg"&&B&&B.note&&B.note.trim()?`<div class="note-box">${esc(B.note)}</div>`:""}
     <div class="btns"><button class="btn" id="w-back"${k>0?"":" disabled"}>Back</button><button class="btn primary" id="w-next"${k<st.length-1?"":" disabled"}>Next</button><button class="btn" id="w-restart">Restart</button><button class="btn" id="w-exit">Exit</button></div>
     <p class="eyebrow">All steps</p>
-    <div class="choices">${st.map((i,n)=>{const x=M.edges[i];return `<button class="choice" data-i="${i}"${i===W.si?' style="border-color:var(--accent);background:var(--accent-soft)"':""}><kbd>${n+1}</kbd><span><b>${esc(x.label)}</b><small>${x.t==="note"?"Note":`${esc(byId(x.a).text)} → ${esc(byId(x.b).text)}`}</small></span></button>`}).join("")}</div>
+    <div class="choices">${st.map((i,n)=>{const x=M.edges[i];return `<button class="choice" data-i="${i}"${i===W.si?' style="border-color:var(--accent);background:var(--accent-soft)"':""}><kbd>${n+1}</kbd><span><b>${esc(oneLine(x.label))}</b><small>${x.t==="note"?"Note":`${esc(byId(x.a).text)} → ${esc(byId(x.b).text)}`}</small></span></button>`}).join("")}</div>
     <p class="msg" style="color:var(--muted)">Tip: use the arrow keys to step, or click any message on the canvas.</p>`;
   $("w-back").onclick=()=>seqMoveStep(-1);$("w-next").onclick=()=>seqMoveStep(1);$("w-restart").onclick=()=>walkTo(st[0]);$("w-exit").onclick=walkStop;
   pane.querySelectorAll(".choice").forEach(b=>b.onclick=()=>walkTo(+b.dataset.i));
 }
 /* Side panel for sequence diagrams (diagram, participant, message, note, block, branch, activation). */
 function seqInspector(){
-  const optP=(sel,blank)=>(blank?`<option value="">(none)</option>`:"")+M.nodes.map(n=>`<option value="${n.id}"${n.id===sel?" selected":""}>${esc(n.text)}</option>`).join("");
+  const optP=(sel,blank)=>(blank?`<option value="">(none)</option>`:"")+M.nodes.map(n=>`<option value="${n.id}"${n.id===sel?" selected":""}>${esc(oneLine(n.text))}</option>`).join("");
   if(!S.sel){
     const msgs=M.edges.filter(e=>e.t==="msg").length;
     pane.innerHTML=`<p class="eyebrow">Sequence diagram</p><h2>${esc(M.title||"Untitled sequence")}</h2>
@@ -1290,7 +1326,7 @@ function seqInspector(){
       <div class="btns">${moves}<button class="btn danger" id="i-del">Delete</button></div>`;
     $("i-a").onchange=x=>mutate(()=>{e.a=x.target.value});$("i-on").onchange=x=>mutate(()=>{e.on=x.target.value==="1"});
   }else if(e.t==="note"){
-    pane.innerHTML=`<p class="eyebrow">Note</p>${field("i-label","Text",e.label,true)}
+    pane.innerHTML=`<p class="eyebrow">Note</p>${field("i-label","Text",brToNl(e.label),true)}
       <div class="field"><label for="i-pos">Position</label><select class="in" id="i-pos">${["left of","right of","over"].map(p=>`<option${p===e.pos?" selected":""}>${p}</option>`).join("")}</select></div>
       <div class="field"><label for="i-a">Participant</label><select class="in" id="i-a">${optP(e.a)}</select></div>
       ${e.pos==="over"?`<div class="field"><label for="i-b">Stretch over to</label><select class="in" id="i-b">${optP(e.b,true)}</select></div>`:""}
@@ -1312,7 +1348,7 @@ function seqInspector(){
     $("i-below").onclick=()=>mutate(()=>{M.edges.splice(i+1,0,{t:"msg",a:e.b,b:e.a,label:"Reply",arrow:"-->>",act:"",pos:"",bend:null});S.sel={type:"edge",i:i+1}});
     $("i-wrap").onchange=x=>{const k=x.target.value;if(!k)return;mutate(()=>{M.edges.splice(i+1,0,{t:"close",a:null,b:null,label:"",arrow:"",act:"",pos:"",kind:"",on:false,bend:null});M.edges.splice(i,0,{t:"open",kind:k,label:k==="loop"?"Every minute":k==="alt"?"Success":k==="opt"?"If needed":"",a:null,b:null,arrow:"",act:"",pos:"",on:false,bend:null});S.sel={type:"edge",i}})};
   }
-  if($("i-label"))live($("i-label"),v=>{e.label=v.replace(/\n/g," ")});
+  if($("i-label"))live($("i-label"),v=>{e.label=nlToBr(v)});
   $("i-up").onclick=()=>mutate(()=>{M.edges.splice(i-1,0,M.edges.splice(i,1)[0]);S.sel={type:"edge",i:i-1}});
   $("i-down").onclick=()=>mutate(()=>{M.edges.splice(i+1,0,M.edges.splice(i,1)[0]);S.sel={type:"edge",i:i+1}});
   if($("i-del"))$("i-del").onclick=deleteSelection;
@@ -1482,6 +1518,27 @@ $("t-panel").onclick=()=>{const hide=!document.body.classList.contains("nopanel"
 $("t-add").onclick=()=>addNode();
 $("t-connect").onclick=()=>setConnect(!S.connect);
 $("t-tidy").onclick=tidy;
+/* ---- Tidy menu ---- picking an option saves it in TIDY and tidies at once; the menu stays open to compare. */
+const tmenu=$("tidy-menu");
+function tidyMenuSync(){
+  const er=M.kind==="er",dir=er?TIDY.dir:(M.dir==="LR"||M.dir==="RL"?"LR":"TD");
+  const cur={style:TIDY.style,dir,space:TIDY.space};
+  tmenu.querySelectorAll(".opts").forEach(g=>g.querySelectorAll("button").forEach(b=>{b.setAttribute("aria-pressed",String(b.dataset.v===cur[g.dataset.opt]));
+    if(g.dataset.opt==="dir")b.disabled=TIDY.style==="organic"}));
+  $("tidy-note").textContent=TIDY.style==="organic"?"Organic has no direction. Each choice rearranges at once; Ctrl+Z undoes."
+    :er?"Each choice rearranges at once. Ctrl+Z undoes.":"Direction also changes the diagram's direction in the Mermaid code. Ctrl+Z undoes.";
+}
+function closeTidyMenu(){tmenu.hidden=true;$("t-tidy-opt").setAttribute("aria-expanded",false)}
+$("t-tidy-opt").onclick=e=>{e.stopPropagation();const open=tmenu.hidden;closeMenu();tmenu.hidden=!open;$("t-tidy-opt").setAttribute("aria-expanded",open);
+  if(open){tidyMenuSync();const b=$("t-tidy-opt").getBoundingClientRect(),t=document.querySelector(".toolbar").getBoundingClientRect();tmenu.style.left=Math.max(6,Math.min(b.left-t.left-90,t.width-290))+"px";
+    (tmenu.querySelector('[aria-pressed="true"]')||tmenu.querySelector("button")).focus()}};
+tmenu.querySelectorAll(".opts").forEach(g=>g.querySelectorAll("button").forEach(b=>b.onclick=()=>{
+  const opt=g.dataset.opt,v=b.dataset.v;
+  if(opt==="dir"&&M.kind!=="er"){mutate(()=>{M.dir=v;layered()});fit();inspector()}
+  else{TIDY[opt]=v;store("untangle-tidy",JSON.stringify(TIDY));tidy()}
+  tidyMenuSync()}));
+document.addEventListener("click",e=>{if(!tmenu.hidden&&!tmenu.contains(e.target)&&!$("t-tidy-opt").contains(e.target))closeTidyMenu()});
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!tmenu.hidden){closeTidyMenu();$("t-tidy-opt").focus()}});
 $("t-undo").onclick=undo;
 $("t-snap").onclick=()=>{S.snap=!S.snap;$("t-snap").setAttribute("aria-pressed",S.snap)};
 $("t-focus").onclick=()=>{S.focus=!S.focus;$("t-focus").setAttribute("aria-pressed",S.focus);if(S.focus&&W.on)walkStop();
@@ -1515,10 +1572,10 @@ function kindUI(){
   $("kind-tag").textContent=view?`${typeName(M.type)}${READONLY?" · view only":""}`:er?"ER diagram":seq?"Sequence diagram":cls?"Class diagram":st?`State diagram · ${M.dir}`:`Flowchart · ${M.dir}`;
   $("t-add-l").textContent=er?"Add table":seq?"Add participant":cls?"Add class":st?"Add state":"Add step";
   const v=viewing();
-  ["t-add","t-connect","t-tidy","t-focus","t-snap"].forEach(id=>{$(id).disabled=v});
-  $("t-walk").disabled=er||cls||v;if(seq){$("t-tidy").disabled=true;$("t-snap").disabled=true}$("t-walk").title=er||cls?"Walkthrough works on flowcharts, state and sequence diagrams":"Step through the flow one choice at a time";
+  ["t-add","t-connect","t-tidy","t-tidy-opt","t-focus","t-snap"].forEach(id=>{$(id).disabled=v});
+  $("t-walk").disabled=er||cls||v;if(seq){$("t-tidy").disabled=$("t-tidy-opt").disabled=true;$("t-snap").disabled=true}$("t-walk").title=er||cls?"Walkthrough works on flowcharts, state and sequence diagrams":"Step through the flow one choice at a time";
   $("t-undo").disabled=!history.length;
-  if(READONLY)["t-add","t-connect","t-tidy","t-undo","t-snap"].forEach(id=>{$(id).hidden=true});
+  if(READONLY)["t-add","t-connect","t-tidy","t-tidy-opt","t-undo","t-snap"].forEach(id=>{$(id).hidden=true});
   $("m-edit").disabled=view;$("m-edit").setAttribute("aria-pressed",!v);$("m-mmd").setAttribute("aria-pressed",v);
   if(v){$("stage-note").textContent=view&&!READONLY?"Drawn by Mermaid · Double-click any text to change it · Edit items in the side panel":"Drawn by Mermaid · Drag to pan, scroll to zoom · Export as PNG or SVG";return}
   if(seq){$("stage-note").textContent="Drag participants sideways or messages up and down · Drag a message's end dot to another lifeline · Double-click to edit";return}
@@ -1565,7 +1622,6 @@ function inspector(){
       <div class="stats"><div class="stat"><b>${M.nodes.filter(n=>!isGroup(n)).length}</b><span>${K[1]}</span></div><div class="stat"><b>${M.edges.length}</b><span>${K[2]}</span></div></div>
       <div class="row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="field"><label for="i-lines">Lines</label><select class="in" id="i-lines">${[["elbow","Elbow"],["curved","Curved"],["straight","Straight"]].map(([v,l])=>`<option value="${v}"${(M.lineStyle||"elbow")===v?" selected":""}>${l}</option>`).join("")}</select></div>
-        ${er?`<div class="field"><label for="i-tidy">Tidy style</label><select class="in" id="i-tidy"><option value="hierarchy"${M.tidyStyle!=="organic"?" selected":""}>Parents above children</option><option value="organic"${M.tidyStyle==="organic"?" selected":""}>Organic</option></select></div>`:""}
       </div>
       ${er?"":`<div class="field"><label for="i-dir">Direction</label><select class="in" id="i-dir">${[["TD","Top to bottom"],["LR","Left to right"],["BT","Bottom to top"],["RL","Right to left"]].map(([v,l])=>`<option value="${v}"${M.dir===v?" selected":""}>${l}</option>`).join("")}</select></div>`}
       <p class="eyebrow">What you can do</p>
@@ -1581,7 +1637,6 @@ function inspector(){
       </ul>`;
     if($("i-dir"))$("i-dir").onchange=e=>{mutate(()=>{M.dir=e.target.value;layered()});fit()};
     $("i-lines").onchange=e=>mutate(()=>{M.lineStyle=e.target.value});
-    if($("i-tidy"))$("i-tidy").onchange=e=>{M.tidyStyle=e.target.value;tidy()};
     return}
   if(S.sel.type==="node"){
     const n=byId(S.sel.id);
@@ -1620,12 +1675,12 @@ function inspector(){
     }else{
       const shapes=stt?{state:"State",choice:"Choice (diamond)",fork:"Fork (bar)",join:"Join (bar)",start:"Start",end:"End"}:SHAPES;
       const noText=["start","end","fork","join","choice"].includes(n.shape);
-      pane.innerHTML=`<p class="eyebrow">${stt?"State":"Step"} · id <code>${esc(n.key)}</code></p>${noText?"":field("i-text",stt?"Name":"Text",n.text,true)}
+      pane.innerHTML=`<p class="eyebrow">${stt?"State":"Step"} · id <code>${esc(n.key)}</code></p>${noText?"":field("i-text",stt?"Name":"Text",brToNl(n.text),true)}
         ${stt&&n.shape==="state"?field("i-desc","Description (shown under the name)",n.desc||"",true):""}
         <div class="field"><label for="i-shape">${stt?"Kind":"Shape"}</label><select class="in" id="i-shape">${Object.entries(shapes).map(([k,l])=>`<option value="${k}"${k===n.shape?" selected":""}>${l}</option>`).join("")}</select></div>
         ${groupField(n)}${field("i-note","Notes (shown in Walkthrough)",n.note,true)}
         <div class="btns"><button class="btn" id="i-walk">Walk from here</button><button class="btn" id="i-conn">Connect from here</button><button class="btn" id="i-newgrp">${stt?"Wrap in a composite state":"Put in a new group"}</button><button class="btn danger" id="i-del">Delete ${stt?"state":"step"}</button></div>`;
-      if($("i-text"))live($("i-text"),v=>{n.text=v.replace(/\n/g," ")});
+      if($("i-text"))live($("i-text"),v=>{n.text=nlToBr(v.trim())});
       if($("i-desc"))live($("i-desc"),v=>{n.desc=v});
       $("i-shape").onchange=e=>mutate(()=>{n.shape=e.target.value});
       $("i-walk").onclick=()=>walkStart(n.id);bindGroupField(n);$("i-newgrp").onclick=()=>newGroupAround(n);
@@ -1681,7 +1736,7 @@ function readonlyPanel(){
     (M.kind==="er"&&n.attrs.length?`<div class="card-sm" style="flex-direction:column;align-items:flex-start;gap:2px">${n.attrs.map(a=>`<span>${esc(a.type)} <b>${esc(a.name)}</b> ${esc(a.keys.join(" "))}</span>`).join("")}</div>`:"")+
     (n.note&&n.note.trim()?`<div class="note-box">${esc(n.note)}</div>`:"")}
   else if(S.sel&&S.sel.type==="edge"){const e=M.edges[S.sel.i];if(e){const A=byId(e.a),B=e.b?byId(e.b):null;
-    sel=`<p class="eyebrow">${M.kind==="seq"?(e.t==="note"?"Note":"Message"):M.kind==="er"?"Relationship":"Connection"}</p><h2>${esc(e.label||"(no label)")}</h2>`+(A&&B?`<div class="card-sm"><b>${esc(nodeLabel(A))}</b><span>→</span><b>${esc(nodeLabel(B))}</b></div>`:"")}}
+    sel=`<p class="eyebrow">${M.kind==="seq"?(e.t==="note"?"Note":"Message"):M.kind==="er"?"Relationship":"Connection"}</p><h2>${esc(oneLine(e.label)||"(no label)")}</h2>`+(A&&B?`<div class="card-sm"><b>${esc(nodeLabel(A))}</b><span>→</span><b>${esc(nodeLabel(B))}</b></div>`:"")}}
   pane.innerHTML=(sel||`<p class="eyebrow">${kindName} · view only</p><h2>${esc(DOC_TITLE)}</h2>`)+`<p class="eyebrow">What you can do</p><ul class="tips"><li>Drag to pan and scroll to zoom.</li><li>Click a box or line to see its details${M.kind==="er"?"":" and notes"}.</li>${M.kind==="er"?"":"<li><b>Walkthrough</b> steps through it one stage at a time.</li>"}<li><b>Focus</b> fades everything not connected to what you select.</li><li><b>Export</b> saves a PNG, SVG or the Mermaid code.</li></ul>`;
 }
 /* Side panel during a flowchart or state walkthrough. */
@@ -1691,7 +1746,7 @@ function walkPanel(){
   pane.innerHTML=`<p class="eyebrow">Walkthrough · step ${W.trail.length}</p>
     <p class="walk-now">${esc(nodeLabel(cur))}</p>
     ${cur.note&&cur.note.trim()?`<div class="note-box">${esc(cur.note)}</div>`:""}
-    ${outs.length?`<p class="eyebrow">${outs.length>1?"Choose a path":"Next"}</p><div class="choices">${outs.map(([e,i],k)=>`<button class="choice" data-e="${i}">${k<9?`<kbd>${k+1}</kbd>`:""}<span><b>${esc(e.label||nodeLabel(byId(e.b)))}</b>${e.label?`<small>→ ${esc(nodeLabel(byId(e.b)))}</small>`:""}</span></button>`).join("")}</div>`
+    ${outs.length?`<p class="eyebrow">${outs.length>1?"Choose a path":"Next"}</p><div class="choices">${outs.map(([e,i],k)=>`<button class="choice" data-e="${i}">${k<9?`<kbd>${k+1}</kbd>`:""}<span><b>${esc(oneLine(e.label)||nodeLabel(byId(e.b)))}</b>${e.label?`<small>→ ${esc(nodeLabel(byId(e.b)))}</small>`:""}</span></button>`).join("")}</div>`
       :`<div class="note-box">End of this path.</div>`}
     <div class="btns"><button class="btn" id="w-back"${W.trail.length>1?"":" disabled"}>Back</button><button class="btn" id="w-restart">Restart</button><button class="btn" id="w-exit">Exit walkthrough</button></div>
     ${starts.length>1?`<div class="field"><label for="w-start">Start from</label><select class="in" id="w-start">${starts.map(s=>`<option value="${s.id}"${s.id===W.trail[0]?" selected":""}>${esc(nodeLabel(s))}</option>`).join("")}</select></div>`:""}
@@ -1742,7 +1797,7 @@ $("tab-inspect").onclick=()=>tab("inspect");$("tab-code").onclick=()=>tab("code"
 function downloadFile(name,data,type){const blob=data instanceof Blob?data:new Blob([data],{type:type||"text/plain"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),4000)}
 const menu=$("export-menu");
 function closeMenu(){menu.hidden=true;$("t-export").setAttribute("aria-expanded",false)}
-$("t-export").onclick=e=>{e.stopPropagation();const open=menu.hidden;menu.hidden=!open;$("t-export").setAttribute("aria-expanded",open);
+$("t-export").onclick=e=>{e.stopPropagation();const open=menu.hidden;closeTidyMenu();menu.hidden=!open;$("t-export").setAttribute("aria-expanded",open);
   if(open){const b=$("t-export").getBoundingClientRect(),t=document.querySelector(".toolbar").getBoundingClientRect();menu.style.left=Math.max(6,Math.min(b.left-t.left,t.width-240))+"px";menu.querySelector("button").focus()}};
 document.addEventListener("click",e=>{if(!menu.hidden&&!menu.contains(e.target)&&!$("t-export").contains(e.target))closeMenu()});
 menu.querySelectorAll("button").forEach(b=>b.onclick=()=>{closeMenu();doExport(b.dataset.x)});
@@ -1843,12 +1898,14 @@ async function flush(checkpoint,opts={}){
   const thumb=opts.unload||LOCAL?null:await makeThumb();
   dirty=false; // edits made while this save is in flight set it again
   const body={source:src,title,thumb,checkpoint:!!checkpoint};if(!opts.force)body.baseUpdatedAt=DOC.updatedAt;
+  if(DOC.blockHash)body.baseBlock=DOC.blockHash; // local mode, a ```mermaid block in a Markdown file: lets the server find it again
   try{const r=await api(`/api/diagrams/${DOC.id}`,{method:"PUT",body,stay:true,keepalive:!!opts.unload});
-    DOC=r.diagram;DOC_TITLE=DOC.title;document.title=`${DOC.title} · Untangle`;lastSaved=src;conflict=false;saveAlert("");setStatus(SAVED_TEXT,"ok")}
+    DOC=r.diagram;DOC_TITLE=DOC.title;document.title=`${DOC.title} · Untangle`;lastSaved=src;conflict=false;saveAlert("");setStatus(SAVED_TEXT,"ok");
+    if(LOCAL&&DOC.path){const want="/f/"+DOC.path.split("/").map(encodeURIComponent).join("/");if(location.pathname!==want)history.replaceState(null,"",want)}}
   catch(e){
     dirty=true;
     if(e.status===409){conflict=true;setStatus("Not saved","err");
-      saveAlert(`<b>${LOCAL?"This file was changed on disk, for example by Git or another editor.":"This diagram was changed in another tab or on another device."}</b> Your changes here are not saved yet. <span class="alert-btns"><button class="btn" id="cf-latest">Load the latest version</button><button class="btn" id="cf-mine">Keep my version</button></span>`);
+      saveAlert(`<b>${LOCAL?(DOC&&DOC.blockHash?"This diagram was changed in the Markdown file, for example by Git or another editor.":"This file was changed on disk, for example by Git or another editor."):"This diagram was changed in another tab or on another device."}</b> Your changes here are not saved yet. <span class="alert-btns"><button class="btn" id="cf-latest">Load the latest version</button><button class="btn" id="cf-mine">Keep my version</button></span>`);
       $("cf-latest").onclick=()=>{dirty=false;conflict=false;DOC=null;location.reload()};
       $("cf-mine").onclick=()=>{saveAlert("");flush(true,{force:true})}}
     else if(e.status===401){setStatus("Logged out","err");

@@ -10,7 +10,7 @@ Untangle is one editor served in two ways.
 | --- | --- | --- |
 | Started with | `npm start` | `untangled` command (`bin/untangle.js`) |
 | Server code | `server/index.js` → `server/app.js` | `server/local.js` |
-| Diagrams are stored in | SQLite (`data/untangle.db`) | `.mmd` / `.mermaid` files in a folder |
+| Diagrams are stored in | SQLite (`data/untangle.db`) | `.mmd` / `.mermaid` files, and ```` ```mermaid ```` blocks in Markdown files, in a folder |
 | Accounts, sharing, history | Yes | No (Git is the history) |
 | Listens on | Any address, behind an HTTPS proxy | `127.0.0.1` only |
 
@@ -37,6 +37,7 @@ server/
   db.js       SQLite schema and numbered migrations
   mail.js     SMTP email (password reset)
   local.js    Local mode: the diagrams API backed by files (createLocalApp)
+  markdown.js Finding and replacing ```mermaid blocks in Markdown files
 bin/
   untangle.js The `untangled` command: argument parsing, then starts local.js
 public/
@@ -56,6 +57,7 @@ scripts/
 test/
   api.test.js    Web app API tests
   local.test.js  Local mode API tests
+  markdown.test.js  Finding and replacing mermaid blocks in Markdown
   e2e/smoke.cjs  Browser test of the main flows
 docs/          These guides
 ```
@@ -148,7 +150,7 @@ New tables go in the `CREATE TABLE IF NOT EXISTS` block. Changes to existing tab
 | Guessing ids | Ids and share tokens are random; other people's diagrams answer 404 | `ownDiagram` |
 | Brute force | Rate limits on login (per IP and email), sign-up, password reset and the API as a whole | `rateLimiter` in `auth.js` |
 | Password reset | Token works once, expires in 1 hour, logs out every session. The reply never says whether an email has an account. Links use `APP_URL`, never the request's Host header | `/auth/forgot`, `/auth/reset` |
-| Local mode | Answers only on `localhost` (Host header check), same custom-header rule, only `.mmd`/`.mermaid` files inside the folder, links leading outside are refused | `resolveFile` in `local.js` |
+| Local mode | Answers only on `localhost` (Host header check), same custom-header rule, only `.mmd`/`.mermaid`/Markdown files inside the folder, links leading outside are refused | `resolveFile` in `local.js` |
 
 ## Saving and conflicts
 
@@ -158,6 +160,21 @@ The editor saves by itself. The logic is in the "app glue" section at the end of
 2. `flush()` sends `PUT /api/diagrams/<id>` with the Mermaid text and `baseUpdatedAt`, the `updatedAt` the editor last saw.
 3. The server compares `baseUpdatedAt` with the stored value. If someone else saved in between it answers **409** and changes nothing. The editor then shows "Load the latest version" or "Keep my version"; the latter saves again without `baseUpdatedAt`.
 4. Local mode does the same with the file's modification time, which is how a `git pull` under an open editor is caught.
+5. A diagram inside a Markdown file works differently, because the rest of the file may change without touching the diagram. See the next section.
+
+## Diagrams inside Markdown files (local mode)
+
+A Markdown diagram's id is the file path plus the block's number: `docs/README.md#2` (sent URL-encoded, so the `#` is `%23`). `server/markdown.js` finds the blocks (`findMermaidBlocks`) and replaces one (`replaceBlock`); `local.js` uses them.
+
+- **Listing:** every `.md`/`.markdown` file is read, and each ```` ```mermaid ```` block becomes one entry, titled with the nearest heading above it.
+- **Reading:** the block's lines, without the fences or the list indent, are the `source`. The reply also has `blockHash`, a fingerprint of that text.
+- **Saving:** the editor sends `blockHash` back as `baseBlock`. The server re-reads the file and splices the new text into that block only, keeping every other byte (line endings and a missing final newline included).
+  - If the block at that number no longer has the fingerprint, the server looks for the one block that does. That covers lines or new diagrams added above it, and the reply's new `path` moves the editor's address.
+  - If no block matches, the diagram itself was changed: **409**, the same conflict prompt as for files. "Keep my version" (a save without `baseUpdatedAt`) then writes to the block at that number.
+  - Text that would close the block early (a line starting with ```` ``` ```` or `~~~`) is refused.
+- **Not supported:** fences inside block quotes, unclosed fences, and creating a new diagram in a Markdown file.
+
+`test/markdown.test.js` covers the block rules; `test/local.test.js` covers the API.
 
 Nothing is saved until `dirty` is true, so opening a diagram never changes it. A preview image sent on its own does not change `updated_at`.
 
@@ -176,6 +193,6 @@ Worth knowing before you plan bigger changes.
 - **`editor.js` is one long file with long lines.** It works and is commented, but it would be easier to change if it were formatted with Prettier and split into ES modules (parsers, layout, rendering, inspector, app glue). Do that as its own change with no behaviour changes, and run both test suites after.
 - **Single instance only.** SQLite, the rate limiter and the session lookups all assume one process. Scaling out needs a shared database (Postgres) and a shared rate limiter.
 - **`node:sqlite` is marked experimental** in Node 22. It has been stable in practice, but re-run the tests when upgrading Node.
-- **Lines don't route around boxes.** `assignPorts` spreads connection points and staggers elbow segments, but a long line can still pass behind an unrelated box.
+- **Lines don't route around boxes.** `assignPorts` spreads connection points and staggers elbow segments, but a long line can still pass behind an unrelated box, and its label can land on that box. The layered layout has no "dummy nodes" for lines that skip a layer, which is the usual fix.
 - **Hand-written files lose inner comments and styling on save** (see "How a diagram is stored").
 - **No email verification** at sign-up, and an account's email can't be changed.

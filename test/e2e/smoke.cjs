@@ -209,6 +209,41 @@ const ISLANDS = "erDiagram\n" + ["A", "B", "C", "D", "E", "F"].map((p) => `  ${p
     await page.waitForURL("**/f/design/login-flow.mmd"); await page.waitForSelector(".node");
     assert.match(fs.readFileSync(path.join(repo, "design/login-flow.mmd"), "utf8"), /^flowchart TD/);
   });
+  step("local mode: a diagram inside a Markdown file is edited in place, and <br> labels survive", async () => {
+    const md = path.join(repo, "docs/guide.md");
+    const GUIDE = "# Guide\n\nIntro paragraph.\n\n## Login\n\n```mermaid\nflowchart TD\n    a[Open app] --> b[Sign in]\n```\n\n## Data model\n\n```mermaid\nflowchart LR\n    u[Two<br/>lines] -->|first<br>second| v[End]\n```\n\nOutro.\n";
+    fs.writeFileSync(md, GUIDE);
+    await page.goto(L + "/"); await page.waitForSelector(".files a");
+    assert.match(await page.textContent(".files"), /guide\.mdData model/, "the heading is shown next to the file name");
+    await page.click('.files a[href$="guide.md%232"]'); await page.waitForSelector(".node");
+    assert.equal(await page.inputValue("#doc-title"), "docs/guide.md · Data model");
+    const texts = await page.$$eval("#world text", (t) => t.map((x) => x.textContent));
+    assert.ok(texts.includes("Two") && texts.includes("lines") && texts.includes("first") && texts.includes("second"), `<br> should split lines: ${texts}`);
+    assert.ok(!texts.some((t) => /<br/i.test(t)), "no literal <br> on the canvas");
+    const box = await page.locator('[data-hit^="node:"]').first().boundingBox();
+    await page.mouse.move(box.x + 20, box.y + 10); await page.mouse.down();
+    await page.mouse.move(box.x + 120, box.y + 90, { steps: 5 }); await page.mouse.up();
+    await page.waitForFunction(() => document.getElementById("save-status").textContent === "Saved to file", null, { timeout: 10000 });
+    const text = fs.readFileSync(md, "utf8"), [head, rest] = GUIDE.split("```mermaid\nflowchart LR");
+    assert.ok(text.startsWith(head + "```mermaid\nflowchart LR\n"), "everything above the block is unchanged");
+    assert.ok(text.endsWith("```\n\nOutro.\n"), "everything below the block is unchanged");
+    assert.match(text, /u\["Two<br\/>lines"\]/, "the <br/> is written back as it was");
+    assert.match(text, /\|first<br>second\|/);
+    assert.match(text, /%% layout: u /, "the layout is saved inside the block");
+    assert.equal(rest.length > 0, true);
+  });
+  step("Tidy options rearrange at once, can be undone, and are remembered", async () => {
+    await page.click("#t-tidy-opt"); await page.waitForSelector("#tidy-menu:not([hidden])");
+    await page.click('#tidy-menu [data-opt="style"] [data-v="grid"]'); await page.waitForTimeout(300);
+    assert.equal(await page.getAttribute('#tidy-menu [data-v="grid"]', "aria-pressed"), "true");
+    assert.equal(await page.isEnabled("#t-undo"), true);
+    await page.click('#tidy-menu [data-opt="style"] [data-v="organic"]'); await page.waitForTimeout(300);
+    assert.equal(await page.isDisabled('#tidy-menu [data-opt="dir"] [data-v="LR"]'), true, "organic has no direction");
+    await page.keyboard.press("Escape"); assert.equal(await page.isHidden("#tidy-menu"), true);
+    await page.reload(); await page.waitForSelector(".node");
+    assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("untangle-tidy"))).style, "organic");
+    await page.evaluate(() => localStorage.removeItem("untangle-tidy"));
+  });
   step("no script errors and no requests to other sites", async () => {
     assert.deepEqual(errors, []);
     assert.deepEqual([...new Set(foreign)], []);

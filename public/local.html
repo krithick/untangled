@@ -17,7 +17,7 @@
   <div class="dash-head">
     <div><p class="eyebrow" id="count">Diagrams</p><h1 id="folder">This folder</h1><p class="path" id="root"></p></div>
     <div class="dash-tools">
-      <input class="in" id="search" type="search" placeholder="Search by file name" aria-label="Search files">
+      <input class="in" id="search" type="search" placeholder="Search by file name or heading" aria-label="Search files">
       <button class="btn primary" id="new-btn">New diagram</button>
     </div>
   </div>
@@ -25,7 +25,7 @@
   <ul class="files" id="files" aria-live="polite"></ul>
   <div class="empty-state" id="empty" hidden>
     <h2>No Mermaid files here yet</h2>
-    <p>Untangle looks for <code>.mmd</code> and <code>.mermaid</code> files in this folder and the folders inside it. Create one to start.</p>
+    <p>Untangle looks for <code>.mmd</code> and <code>.mermaid</code> files, and <code>```mermaid</code> blocks in Markdown files, in this folder and the folders inside it. Create one to start.</p>
     <div class="row"><button class="btn primary" id="empty-new">New diagram</button></div>
   </div>
   <p class="msg" style="color:var(--muted);padding-bottom:40px">Changes are written straight to these files. Commit them with Git as usual.</p>

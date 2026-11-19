@@ -100,3 +100,62 @@ test("other websites can't drive it: custom header and localhost-only Host", asy
 test("pages load", async () => {
   for (const p of ["/", "/f/docs/flow.mmd", "/js/editor.js", "/js/local.js", "/vendor/mermaid.min.js"]) assert.equal((await call("GET", p)).status, 200, p);
 });
+
+/* ---- diagrams inside Markdown files (server/markdown.js) ---- */
+const GUIDE = "# Guide\n\nSome text.\n\n## Checkout\n\n```mermaid\nflowchart TD\n    a --> b\n```\n\n## Data\n\n```mermaid\nerDiagram\n    A ||--o{ B : has\n```\n\nThe end.\n";
+const block = (n) => id(`guide.md#${n}`);
+const guide = () => fs.readFileSync(path.join(root, "guide.md"), "utf8");
+
+test("Markdown: each ```mermaid block is listed and opens on its own", async () => {
+  fs.writeFileSync(path.join(root, "guide.md"), GUIDE);
+  const list = (await call("GET", "/api/diagrams")).body.diagrams.filter((d) => d.file === "guide.md");
+  assert.deepEqual(list.map((d) => [d.path, d.title, d.kind]), [["guide.md#1", "guide.md · Checkout", "flow"], ["guide.md#2", "guide.md · Data", "er"]]);
+  const r = await call("GET", `/api/diagrams/${block(2)}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.diagram.source, "erDiagram\n    A ||--o{ B : has");
+  assert.ok(r.body.diagram.blockHash);
+  assert.equal((await call("GET", `/api/diagrams/${id("guide.md")}`)).status, 400, "a Markdown file without a block number isn't a diagram");
+  assert.equal((await call("GET", `/api/diagrams/${block(3)}`)).status, 404);
+});
+
+test("Markdown: saving rewrites only that block, and keeps edits made elsewhere in the file", async () => {
+  fs.writeFileSync(path.join(root, "guide.md"), GUIDE);
+  const d = (await call("GET", `/api/diagrams/${block(1)}`)).body.diagram;
+  await new Promise((r) => setTimeout(r, 20));
+  fs.writeFileSync(path.join(root, "guide.md"), GUIDE.replace("Some text.", "Some text, edited in another editor."));
+  const r = await call("PUT", `/api/diagrams/${block(1)}`, { source: "flowchart TD\n    a --> c\n%% layout: a 60 60", baseUpdatedAt: d.updatedAt, baseBlock: d.blockHash });
+  assert.equal(r.status, 200, "a change outside the block is not a conflict");
+  assert.equal(guide(), GUIDE.replace("Some text.", "Some text, edited in another editor.").replace("    a --> b\n", "    a --> c\n%% layout: a 60 60\n"));
+});
+
+test("Markdown: a block that moved is found again; a block that changed is a conflict", async () => {
+  fs.writeFileSync(path.join(root, "guide.md"), GUIDE);
+  let d = (await call("GET", `/api/diagrams/${block(1)}`)).body.diagram;
+  fs.writeFileSync(path.join(root, "guide.md"), "```mermaid\npie\n    \"x\" : 1\n```\n\n" + GUIDE);
+  let r = await call("PUT", `/api/diagrams/${block(1)}`, { source: "flowchart TD\n    a --> moved", baseUpdatedAt: d.updatedAt, baseBlock: d.blockHash });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.diagram.path, "guide.md#2", "the reply names the block's new position");
+  assert.match(guide(), /^```mermaid\npie\n/, "the new block above is untouched");
+  assert.match(guide(), /a --> moved/);
+
+  d = r.body.diagram;
+  fs.writeFileSync(path.join(root, "guide.md"), guide().replace("a --> moved", "a --> pulled"));
+  r = await call("PUT", `/api/diagrams/${block(2)}`, { source: "flowchart TD\n    a --> mine", baseUpdatedAt: d.updatedAt, baseBlock: d.blockHash });
+  assert.equal(r.status, 409);
+  assert.match(guide(), /pulled/);
+  r = await call("PUT", `/api/diagrams/${block(2)}`, { source: "flowchart TD\n    a --> mine", baseBlock: d.blockHash });
+  assert.equal(r.status, 200, "Keep my version overwrites the block on purpose");
+  assert.match(guide(), /a --> mine/);
+  assert.match(guide(), /^```mermaid\npie\n/);
+});
+
+test("Markdown: the same folder rules apply, and new diagrams are .mmd files", async () => {
+  fs.writeFileSync(path.join(outside, "notes.md"), "```mermaid\nflowchart TD\n    secret --> data\n```\n");
+  for (const bad of ["../outside/notes.md#1", "link/notes.md#1"]) {
+    const r = await call("GET", `/api/diagrams/${id(bad)}`);
+    assert.equal(r.status, 400, bad);
+    assert.equal((await call("PUT", `/api/diagrams/${id(bad)}`, { source: FLOW })).status, 400);
+  }
+  assert.equal((await call("POST", "/api/diagrams", { title: "docs/new.md", source: FLOW })).status, 400);
+  assert.equal((await call("GET", "/f/guide.md%231")).status, 200);
+});
