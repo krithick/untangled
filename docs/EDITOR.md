@@ -143,10 +143,13 @@ Each editable type has a parser and a writer.
 
 ### Lines
 
-`geom(edge)` returns `{pA, pB, H, path, uA, uB}`: end points, the label/handle point, the SVG path and a unit direction at each end for markers.
+`geom(edge)` returns `{pA, pB, H, pts, path, uA, uB}`: end points, the middle point (the drag handle), the line as a list of points, the SVG path and a unit direction at each end for markers.
 
 - An edge the user hasn't bent gets **ports**: `assignPorts()` picks a side of each box, spreads the lines along it, and `routedGeom()` draws elbow, curved or straight per `M.lineStyle`.
-- An edge with a `bend`, or a self-loop, is a quadratic curve through `H`.
+- **Going around boxes.** `assignPorts()` first tries the sides that face each other. If that route would pass through another box (`crossings()`), it tries all 16 pairs of sides and keeps the one through the fewest boxes, then the shortest. `elbowPts()` turns a pair of sides into a route: opposite sides meet in the middle, the same side on both boxes makes a U around the outside, and one upright plus one flat side makes an L. Straight lines skip this, since they can't bend round anything.
+- An edge with a `bend`, or a self-loop, is a quadratic curve through `H`. It has no `pts`.
+
+**Labels.** `renderInner()` places labels one at a time. Labels that can't move (bent lines, self-loops) go first. Every other label goes through `labelSpot()`: it starts at the middle and, if that covers a box or an earlier label, slides along the line (`pts`), then tries just beside it, and keeps the spot that covers the least area. Dragging a label still bends the line and pins the label where it is dropped.
 
 ## Hit testing and gestures
 

@@ -140,7 +140,7 @@ Security: passwords are hashed with scrypt; sessions are random tokens stored ha
 - Email verification at sign-up, and changing an account's email address
 - Real-time collaboration and comments; teams, billing and plans
 - Embeds for Notion, Confluence and GitHub READMEs
-- Lines that route around boxes in very dense diagrams (a line's label can land on a box it passes)
+- Full line routing for very dense diagrams (lines pick a route around boxes, but it isn't a full router)
 - Markdown diagrams inside block quotes (`> ```mermaid`), and adding a new diagram to a Markdown file from Untangle
 - Canvas editing for sequence `box` groups and `create`/`destroy`, and state concurrency regions (`--`); these open in the outline editor
 - Running more than one server instance (needs a shared database and rate limiter)

@@ -193,6 +193,6 @@ Worth knowing before you plan bigger changes.
 - **`editor.js` is one long file with long lines.** It works and is commented, but it would be easier to change if it were formatted with Prettier and split into ES modules (parsers, layout, rendering, inspector, app glue). Do that as its own change with no behaviour changes, and run both test suites after.
 - **Single instance only.** SQLite, the rate limiter and the session lookups all assume one process. Scaling out needs a shared database (Postgres) and a shared rate limiter.
 - **`node:sqlite` is marked experimental** in Node 22. It has been stable in practice, but re-run the tests when upgrading Node.
-- **Lines don't route around boxes.** `assignPorts` spreads connection points and staggers elbow segments, but a long line can still pass behind an unrelated box, and its label can land on that box. The layered layout has no "dummy nodes" for lines that skip a layer, which is the usual fix.
+- **Line routing is simple.** A line that would pass through a box picks other sides (a U or an L shape around it), and labels slide off boxes. That handles most cases, but it is not a full router: in a very dense diagram a route can still cross a box when every pair of sides does, and lines can run alongside each other. A real orthogonal router (a visibility graph with A* search) is the next step if that matters.
 - **Hand-written files lose inner comments and styling on save** (see "How a diagram is stored").
 - **No email verification** at sign-up, and an account's email can't be changed.

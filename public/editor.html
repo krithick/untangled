@@ -215,6 +215,14 @@ body.fs .appbar,body.fs .banner{display:none}
 body.fs .work{flex:1;min-height:0;grid-template-rows:minmax(0,1fr)}
 body.fs .stage{height:100%}
 body.fs aside.side{max-height:none;height:100%;min-height:0}
+/* Desktop: the editor fills the window, so the canvas gets every spare pixel (phones keep the scrolling layout). */
+@media (min-width:901px) and (min-height:560px){
+  body:not(.fs){padding-block:12px}
+  body:not(.fs) .page{max-width:none;height:calc(100vh - 24px);height:calc(100dvh - 24px);gap:10px}
+  body:not(.fs) .work{flex:1;min-height:0;grid-template-rows:minmax(0,1fr)}
+  body:not(.fs) .stage{height:100%}
+  body:not(.fs) aside.side{max-height:none;height:100%;min-height:0}
+}
 body.nopanel .work{grid-template-columns:minmax(0,1fr)}
 body.nopanel aside.side{display:none}
 .vtable{display:grid;grid-template-columns:repeat(var(--cols),minmax(0,1fr)) auto;gap:4px;align-items:center}

@@ -129,6 +129,25 @@ const ISLANDS = "erDiagram\n" + ["A", "B", "C", "D", "E", "F"].map((p) => `  ${p
     assert.equal(size.n, 18);
     assert.ok(size.w < 2200 && size.h < 1200, `diagram spread too far: ${size.w} × ${size.h}`);
   });
+  step("lines go around boxes instead of through them, and labels stay off boxes", async () => {
+    const SKIP = "flowchart LR\n    a[Start] -->|next| b[Middle] -->|then| c[End]\n    a -->|skip the middle| c\n    b -->|back| a";
+    const { diagram } = await api("POST", "/api/diagrams", { title: "Skip", source: SKIP });
+    await page.goto(`${B}/d/${diagram.id}`); await page.waitForSelector(".node");
+    await page.click("#t-tidy"); await page.waitForTimeout(400);
+    const r = await page.evaluate(() => {
+      const boxes = [...document.querySelectorAll("#world .node:not(.grp)")].map((e) => e.getBoundingClientRect());
+      const inBox = (x, y) => boxes.some((b) => x > b.left + 3 && x < b.right - 3 && y > b.top + 3 && y < b.bottom - 3);
+      let through = 0;
+      document.querySelectorAll("#world .edge-line").forEach((pa) => { const L = pa.getTotalLength(), m = pa.getScreenCTM();
+        for (let d = 6; d < L - 6; d += 4) { const q = pa.getPointAtLength(d); if (inBox(m.a * q.x + m.e, m.d * q.y + m.f)) { through++; break; } } });
+      const onBox = [...document.querySelectorAll("#world .lbl rect")].map((e) => e.getBoundingClientRect())
+        .filter((l) => boxes.some((b) => l.left < b.right - 1 && b.left < l.right - 1 && l.top < b.bottom - 1 && b.top < l.bottom - 1)).length;
+      return { through, onBox, lines: document.querySelectorAll("#world .edge-line").length };
+    });
+    assert.equal(r.lines, 4);
+    assert.equal(r.through, 0, "a line passes through a box");
+    assert.equal(r.onBox, 0, "a label covers a box");
+  });
   step("exporting a PNG downloads a file", async () => {
     await page.click("#t-export"); await page.click('[data-x="image"]');
     await page.waitForFunction(() => !document.getElementById("x-save").disabled, null, { timeout: 15000 });

@@ -598,15 +598,42 @@ function relMid(r){const A=byId(r.a),B=byId(r.b);if(A===B)return {x:A.x+A.w+46,y
 /* ---- connection routing: spread ports along box sides, then draw elbow, curved or straight lines ---- */
 const SIDEV={top:{x:0,y:-1},bottom:{x:0,y:1},left:{x:-1,y:0},right:{x:1,y:0}};
 const POINTY=["diamond","circle","choice","start","end","fork","join"];
-/* Gives every un-bent edge its own start and end point, spread along the facing sides of the two boxes, and
-   staggers elbow segments that would overlap. Results: r._pA, r._pB (points), r._sA, r._sB (sides), r._off. */
+/* The corner points of an elbow line from pA (leaving side sA) to end (entering side sB). Opposite sides meet in
+   the middle (off staggers lines sharing a gap); the same side on both boxes makes a U around the outside;
+   one upright and one flat side make an L. */
+function elbowPts(pA,sA,end,sB,off){
+  const vA=sA==="top"||sA==="bottom",vB=sB==="top"||sB==="bottom",G=24,o=off||0;
+  if(vA&&vB){const my=sA!==sB?(pA.y+end.y)/2+o:sA==="top"?Math.min(pA.y,end.y)-G-Math.abs(o):Math.max(pA.y,end.y)+G+Math.abs(o);return [pA,{x:pA.x,y:my},{x:end.x,y:my},end]}
+  if(!vA&&!vB){const mx=sA!==sB?(pA.x+end.x)/2+o:sA==="left"?Math.min(pA.x,end.x)-G-Math.abs(o):Math.max(pA.x,end.x)+G+Math.abs(o);return [pA,{x:mx,y:pA.y},{x:mx,y:end.y},end]}
+  return vA?[pA,{x:pA.x,y:end.y},end]:[pA,{x:end.x,y:pA.y},end];
+}
+const sideMid=(n,s)=>s==="top"?{x:n.x+n.w/2,y:n.y}:s==="bottom"?{x:n.x+n.w/2,y:n.y+n.h}:s==="left"?{x:n.x,y:n.y+n.h/2}:{x:n.x+n.w,y:n.y+n.h/2};
+/* How many boxes a polyline passes through (its own two boxes count too, so a route can't double back into them). */
+function crossings(pts,obst){let n=0;
+  for(const b of obst)for(let i=1;i<pts.length;i++){const p=pts[i-1],q=pts[i];
+    if(Math.max(p.x,q.x)>b.x0&&Math.min(p.x,q.x)<b.x1&&Math.max(p.y,q.y)>b.y0&&Math.min(p.y,q.y)<b.y1){n++;break}}
+  return n}
+const SIDES=["top","bottom","left","right"];
+/* Gives every un-bent edge its own start and end point, spread along the sides of the two boxes, and staggers
+   elbow segments that would overlap. Sides face each other, unless that line would pass through another box:
+   then every pair of sides is tried and the route through fewest boxes wins (shorter breaks ties).
+   Results: r._pA, r._pB (points), r._sA, r._sB (sides), r._off. */
 function assignPorts(){
   const horizPref=(M.kind==="flow"||M.kind==="class")&&(M.dir==="LR"||M.dir==="RL");
   const slots=new Map(),put=(n,side,item)=>{const k=n.id+"|"+side;if(!slots.has(k))slots.set(k,{n,side,items:[]});slots.get(k).items.push(item)};
+  const avoid=(M.lineStyle||"elbow")!=="straight";
+  /* obstacles, shrunk by 1px so a line leaving a box's border doesn't count as passing through it */
+  const obst=avoid?M.nodes.filter(n=>!isGroup(n)&&n.w).map(n=>({id:n.id,x0:n.x+1,y0:n.y+1,x1:n.x+n.w-1,y1:n.y+n.h-1})):[];
+  const len=pts=>pts.reduce((t,p,i)=>i?t+Math.abs(p.x-pts[i-1].x)+Math.abs(p.y-pts[i-1].y):0,0);
   M.edges.forEach(r=>{r._pA=r._pB=null;const A=byId(r.a),B=byId(r.b);if(!A||!B||A===B||r.bend||!A.w||!B.w)return;
     const ovX=A.x<B.x+B.w&&B.x<A.x+A.w,ovY=A.y<B.y+B.h&&B.y<A.y+A.h,ca=ctr(A),cb=ctr(B);
     const vert=horizPref?ovX:!ovY;let sA,sB;
     if(vert){if(cb.y>=ca.y){sA="bottom";sB="top"}else{sA="top";sB="bottom"}}else{if(cb.x>=ca.x){sA="right";sB="left"}else{sA="left";sB="right"}}
+    if(avoid&&crossings(elbowPts(sideMid(A,sA),sA,sideMid(B,sB),sB),obst)){
+      let best=null;
+      for(const a of SIDES)for(const b of SIDES){const pts=elbowPts(sideMid(A,a),a,sideMid(B,b),b);
+        const c=crossings(pts,obst)*100000+len(pts)+(a===sA&&b===sB?0:40);if(!best||c<best.c)best={c,a,b}}
+      sA=best.a;sB=best.b}
     r._sA=sA;r._sB=sB;put(A,sA,{r,end:"A",o:cb});put(B,sB,{r,end:"B",o:ca})});
   slots.forEach(({n,side,items})=>{const h=side==="top"||side==="bottom";
     items.sort((p,q)=>h?p.o.x-q.o.x:p.o.y-q.o.y);
@@ -630,15 +657,35 @@ function roundPath(pts,rad){let d=`M${pts[0].x} ${pts[0].y}`;
 function routedGeom(r){
   const st=M.lineStyle||"elbow",uA=SIDEV[r._sA],uB=SIDEV[r._sB],pA=r._pA,pB=r._pB;
   const end=M.kind==="flow"&&r.arrow?{x:pB.x+uB.x*9,y:pB.y+uB.y*9}:pB;
-  if(st==="straight"){return {pA,pB,H:{x:(pA.x+pB.x)/2,y:(pA.y+pB.y)/2},path:`M${pA.x} ${pA.y}L${end.x} ${end.y}`,uA:unit(pA,pB),uB:unit(pB,pA)}}
+  if(st==="straight"){return {pA,pB,H:{x:(pA.x+pB.x)/2,y:(pA.y+pB.y)/2},pts:[pA,end],path:`M${pA.x} ${pA.y}L${end.x} ${end.y}`,uA:unit(pA,pB),uB:unit(pB,pA)}}
   if(st==="curved"){const d=Math.max(30,Math.hypot(pB.x-pA.x,pB.y-pA.y)*0.4),c1={x:pA.x+uA.x*d,y:pA.y+uA.y*d},c2={x:pB.x+uB.x*d,y:pB.y+uB.y*d};
-    return {pA,pB,H:{x:.125*pA.x+.375*c1.x+.375*c2.x+.125*pB.x,y:.125*pA.y+.375*c1.y+.375*c2.y+.125*pB.y},path:`M${pA.x} ${pA.y}C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${end.x} ${end.y}`,uA,uB}}
-  const vA=r._sA==="top"||r._sA==="bottom",vB=r._sB==="top"||r._sB==="bottom",off=r._off||0;let pts;
-  if(vA&&vB){const my=(pA.y+pB.y)/2+off;pts=[pA,{x:pA.x,y:my},{x:end.x,y:my},end]}
-  else if(!vA&&!vB){const mx=(pA.x+pB.x)/2+off;pts=[pA,{x:mx,y:pA.y},{x:mx,y:end.y},end]}
-  else if(vA)pts=[pA,{x:pA.x,y:end.y},end];else pts=[pA,{x:end.x,y:pA.y},end];
+    const bz=t=>{const u=1-t;return {x:u*u*u*pA.x+3*u*u*t*c1.x+3*u*t*t*c2.x+t*t*t*end.x,y:u*u*u*pA.y+3*u*u*t*c1.y+3*u*t*t*c2.y+t*t*t*end.y}};
+    return {pA,pB,H:{x:.125*pA.x+.375*c1.x+.375*c2.x+.125*pB.x,y:.125*pA.y+.375*c1.y+.375*c2.y+.125*pB.y},pts:Array.from({length:17},(_,k)=>bz(k/16)),path:`M${pA.x} ${pA.y}C${c1.x} ${c1.y} ${c2.x} ${c2.y} ${end.x} ${end.y}`,uA,uB}}
+  const pts=elbowPts(pA,r._sA,end,r._sB,r._off);
   let H;if(pts.length===4)H={x:(pts[1].x+pts[2].x)/2,y:(pts[1].y+pts[2].y)/2};else{const l1=Math.hypot(pts[1].x-pts[0].x,pts[1].y-pts[0].y),l2=Math.hypot(pts[2].x-pts[1].x,pts[2].y-pts[1].y);H=l1>l2?{x:(pts[0].x+pts[1].x)/2,y:(pts[0].y+pts[1].y)/2}:{x:(pts[1].x+pts[2].x)/2,y:(pts[1].y+pts[2].y)/2}}
-  return {pA,pB,H,path:roundPath(pts,10),uA,uB};
+  return {pA,pB,H,pts,path:roundPath(pts,10),uA,uB};
+}
+/* Where an un-bent line's label goes. It starts at H (the middle of the line) and, if the label would cover a box
+   or a label placed before it, tries other points along the line, nearest the middle first, keeping the spot
+   that covers least area. boxes and placed are rectangles {x0, y0, x1, y1, wt}; wt is how bad covering it is.
+   Lines bent by hand keep the spot the user dragged to (they have no pts). */
+function labelSpot(g,w,h,boxes,placed){
+  const P=g.pts;if(!P||P.length<2)return g.H;
+  const seg=[];let total=0;for(let i=1;i<P.length;i++){const l=Math.hypot(P[i].x-P[i-1].x,P[i].y-P[i-1].y);seg.push(l);total+=l}
+  if(total<w*0.8)return g.H; // too short to slide along
+  /* the point a fraction f along the line, and which way the line runs there (for sideways spots) */
+  const at=f=>{let d=f*total;for(let i=0;i<seg.length;i++){if(d<=seg[i]||i===seg.length-1){const t=seg[i]?Math.min(1,d/seg[i]):0;
+    return {x:P[i].x+(P[i+1].x-P[i].x)*t,y:P[i].y+(P[i+1].y-P[i].y)*t,flat:Math.abs(P[i+1].x-P[i].x)>=Math.abs(P[i+1].y-P[i].y)}}d-=seg[i]}return g.H};
+  /* cost = area covered, weighted; a small margin around the label counts too, so labels don't touch */
+  const cost=c=>{const x0=c.x-w/2-4,x1=c.x+w/2+4,y0=c.y-h/2-3,y1=c.y+h/2+3;let n=0;
+    const add=(b,wt)=>{const ox=Math.min(x1,b.x1)-Math.max(x0,b.x0),oy=Math.min(y1,b.y1)-Math.max(y0,b.y0);if(ox>0&&oy>0)n+=ox*oy*wt};
+    for(const b of boxes)add(b,b.wt);for(const b of placed)add(b,1);return n};
+  let best=g.H,bc=cost(g.H);if(!bc)return best;
+  const F=[.5,.42,.58,.34,.66,.26,.74,.2,.8,.14,.86];
+  for(const f of F){const c=at(f),k=cost(c);if(k<bc){best=c;bc=k;if(!k)return best}}
+  /* nowhere on the line is clear: try just beside it (above or below a flat part, left or right of an upright one) */
+  for(const f of F.slice(0,7)){const c=at(f);for(const sgn of [-1,1]){const d=c.flat?{x:c.x,y:c.y+sgn*(h/2+5)}:{x:c.x+sgn*(w/2+5),y:c.y};const k=cost(d)+w*h*0.15;if(k<bc){best=d;bc=k}}}
+  return best;
 }
 const isMany=k=>k==="zeroMany"||k==="oneMany",isOne=k=>k==="one"||k==="zeroOne";
 /* ER: draw the "one" side above the "many" side */
@@ -655,7 +702,7 @@ function geom(r){
   const uA=unit(pA,C||pB),uB=unit(pB,C||pA);
   let end=pB;if(M.kind==="flow"&&r.arrow)end={x:pB.x+uB.x*9,y:pB.y+uB.y*9};
   const path=C?`M${pA.x} ${pA.y}Q${C.x} ${C.y} ${end.x} ${end.y}`:`M${pA.x} ${pA.y}L${end.x} ${end.y}`;
-  return {pA,pB,H,path,uA,uB};
+  return {pA,pB,H,path,uA,uB,pts:C?null:[pA,end]};
 }
 /* Crow's-foot marker for an ER relationship end. */
 function crowMarker(p,u,kind){
@@ -699,16 +746,22 @@ function renderInner(plain){
   M.nodes.forEach(measure);layoutGroups();assignPorts();
   const L=plain?null:litSets();
   let out=groupBoxes(plain,L),labs="";
+  /* what a label should not cover: every box (badly), and the title bar of every group (less badly) */
+  const boxes=M.nodes.filter(n=>n.w).map(n=>isGroup(n)?{x0:n.x,y0:n.y,x1:n.x+n.w,y1:n.y+30,wt:1}:{x0:n.x,y0:n.y,x1:n.x+n.w,y1:n.y+n.h,wt:3}),placed=[];
+  const G=M.edges.map(r=>byId(r.a)&&byId(r.b)?geom(r):null);
+  G.forEach((g,i)=>{const r=M.edges[i];if(g&&r.label&&!g.pts){const lw=tw(r.label,"lbl")+16,lh=20+(brLines(r.label).length-1)*LINE_H.lbl;placed.push({x0:g.H.x-lw/2,y0:g.H.y-lh/2,x1:g.H.x+lw/2,y1:g.H.y+lh/2})}});
   M.edges.forEach((r,i)=>{
-    if(!byId(r.a)||!byId(r.b))return;
-    const g=geom(r);let cls="edge";
+    if(!G[i])return;
+    const g=G[i];let cls="edge";
     if(M.kind==="er"){if(!r.ident)cls+=" dashed"}else if(M.kind==="class"){if(r.dotted)cls+=" dashed"}else{if(r.style==="thick")cls+=" thick";if(r.style==="dotted")cls+=" dotted"}
     if(!plain){if(S.sel&&S.sel.type==="edge"&&S.sel.i===i)cls+=" sel";
       if(L){if(L.mode==="walk"){cls+=L.walked.has(i)?" walked":L.nexte.has(i)?" nexte":" dim"}else if(!L.edges.has(i))cls+=" dim"}}
     let marks="";
     if(M.kind==="er")marks=crowMarker(g.pA,g.uA,r.ka)+crowMarker(g.pB,g.uB,r.kb);else if(M.kind==="class")marks=classMarks(g,r);else if(r.arrow)marks=arrowHead(g.pB,g.uB);
     let lab="";
-    if(r.label){const lw=tw(r.label,"lbl")+16,lh=20+(brLines(r.label).length-1)*LINE_H.lbl;lab=`<g class="lbl" data-hit="label:${i}"><rect x="${g.H.x-lw/2}" y="${g.H.y-lh/2}" width="${lw}" height="${lh}" rx="10"/>${T("lbl-t",g.H.x,g.H.y+4,r.label,"lbl","middle")}</g>`}
+    if(r.label){const lw=tw(r.label,"lbl")+16,lh=20+(brLines(r.label).length-1)*LINE_H.lbl,p=g.pts?labelSpot(g,lw,lh,boxes,placed):g.H;
+      if(g.pts)placed.push({x0:p.x-lw/2,y0:p.y-lh/2,x1:p.x+lw/2,y1:p.y+lh/2});
+      lab=`<g class="lbl" data-hit="label:${i}"><rect x="${p.x-lw/2}" y="${p.y-lh/2}" width="${lw}" height="${lh}" rx="10"/>${T("lbl-t",p.x,p.y+4,r.label,"lbl","middle")}</g>`}
     else if(!plain)lab=`<circle class="knob" data-hit="label:${i}" cx="${g.H.x}" cy="${g.H.y}" r="6"/>`;
     out+=`<g class="${cls}">${plain?"":`<path class="edge-hit" data-hit="rel:${i}" d="${g.path}"/>`}<path class="edge-line" d="${g.path}"/>${marks}</g>`;
     if(lab)labs+=`<g class="${cls}">${lab}</g>`;
@@ -801,7 +854,7 @@ function bbox(){if(viewing())return MV&&MV.w?{x0:0,y0:0,x1:MV.w,y1:MV.h}:{x0:0,y
 function fit(all){
   if(!viewing()&&!M.nodes.length){V.tx=40;V.ty=40;V.k=1;applyView();return}
   const b=bbox(),r=svg.getBoundingClientRect(),pad=30;
-  const k=Math.min(1.15,Math.max(.2,Math.min((r.width-pad*2)/(b.x1-b.x0),(r.height-pad*2-30)/(b.y1-b.y0))));
+  const k=Math.min(1.3,Math.max(.2,Math.min((r.width-pad*2)/(b.x1-b.x0),(r.height-pad*2-30)/(b.y1-b.y0))));
   if(all!==true&&k<0.55){/* too small to read: show the top of the diagram at a readable size instead */
     const kw=Math.min(0.9,Math.max(0.55,(r.width-pad*2)/(b.x1-b.x0)));V.k=kw;
     V.tx=(b.x1-b.x0)*kw<r.width?(r.width-(b.x1-b.x0)*kw)/2-b.x0*kw:pad-b.x0*kw;V.ty=pad-b.y0*kw;applyView();return}
@@ -910,7 +963,7 @@ function forceUnits(U,E){
     E.forEach(([i,j])=>{if(i===j)return;let dx=P[i].x-P[j].x,dy=P[i].y-P[j].y,d=Math.max(1,Math.hypot(dx,dy));const f=d*d/K;D[i].x-=dx/d*f;D[i].y-=dy/d*f;D[j].x+=dx/d*f;D[j].y+=dy/d*f});
     const T=80*(1-it/500)+1;P.forEach((p,i)=>{const d=Math.hypot(D[i].x,D[i].y)||1;p.x+=D[i].x/d*Math.min(d,T);p.y+=D[i].y/d*Math.min(d,T)});
   }
-  const gap=50*sp;
+  const gap=70*sp; // room for a line label between neighbours
   for(let pass=0;pass<80;pass++){let moved=false;
     for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){const a=U[i],b=U[j];
       const ox=(a.w+b.w)/2+gap-Math.abs(P[i].x-P[j].x),oy=(a.h+b.h)/2+gap-Math.abs(P[i].y-P[j].y);
