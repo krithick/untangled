@@ -18,10 +18,18 @@ function render() {
   $("count").textContent = `${files.length} diagram${files.length === 1 ? "" : "s"}`;
   $("empty").hidden = files.length > 0;
   $("files").hidden = files.length === 0;
+  const docsShown = new Set();
   $("files").innerHTML = list.length ? list.map((f) => {
+    // Before a Markdown file's first diagram, a row that opens the whole document in the viewer (/m/...).
+    let doc = "";
+    if (f.block && !docsShown.has(f.file)) {
+      docsShown.add(f.file);
+      const n = files.filter((x) => x.file === f.file).length, j = f.file.lastIndexOf("/");
+      doc = `<li class="doc-row"><a href="/m/${f.file.split("/").map(encodeURIComponent).join("/")}"><span class="fname"><span class="fdir">${esc(f.file.slice(0, j + 1))}</span><b>${esc(f.file.slice(j + 1))}</b><span class="fblock">read the document</span></span><span class="fmeta">Markdown · ${n} diagram${n === 1 ? "" : "s"}</span></a></li>`;
+    }
     const file = f.file || f.path || f.title, i = file.lastIndexOf("/");
     const part = f.block ? `<span class="fblock">${esc(f.title.slice(file.length + 3))}</span>` : "";
-    return `<li><a href="${link(f.path || f.title)}"><span class="fname"><span class="fdir">${esc(file.slice(0, i + 1))}</span><b>${esc(file.slice(i + 1))}</b>${part}</span><span class="fmeta">${esc(KIND[f.kind] || f.kind)}${f.block ? " in Markdown" : ""} · ${ago(f.updated_at)}</span></a></li>`;
+    return doc + `<li${f.block ? ' class="in-doc"' : ""}><a href="${link(f.path || f.title)}"><span class="fname"><span class="fdir">${esc(file.slice(0, i + 1))}</span><b>${esc(file.slice(i + 1))}</b>${part}</span><span class="fmeta">${esc(KIND[f.kind] || f.kind)}${f.block ? " in Markdown" : ""} · ${ago(f.updated_at)}</span></a></li>`;
   }).join("") : `<li class="none">No files match "${esc(q)}".</li>`;
 }
 async function load() {

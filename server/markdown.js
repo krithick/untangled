@@ -57,3 +57,12 @@ export function replaceBlock(text, block, source) {
   lines.splice(block.start, block.end - block.start, ...out);
   return lines.join("\n");
 }
+
+/** The Markdown text with each diagram block (fences included) replaced by a line `UNTANGLE-DIAGRAM-<n>`,
+    so the viewer can render the rest as Markdown and put the live diagram where the marker lands.
+    The numbers match findMermaidBlocks, so they are also the diagram ids (README.md#n). */
+export function withPlaceholders(text, blocks = findMermaidBlocks(text)) {
+  const lines = String(text).split("\n").map((l) => l.replace(/\r$/, ""));
+  for (const b of [...blocks].reverse()) lines.splice(b.start - 1, b.end - b.start + 2, "", `${b.indent}UNTANGLE-DIAGRAM-${b.index}`, "");
+  return lines.join("\n");
+}

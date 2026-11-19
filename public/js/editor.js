@@ -58,10 +58,11 @@
 "use strict";
 /* edit: a saved diagram in an account · local: a .mmd file on this computer · share: view only · demo: kept in this browser */
 const MODE=/^\/s\//.test(location.pathname)?"share":/^\/demo/.test(location.pathname)?"demo":/^\/f\//.test(location.pathname)?"local":"edit";
-const LOCAL=MODE==="local",SAVES=MODE==="edit"||LOCAL;
+/* embed: a local diagram shown inside the Markdown viewer (/m/...), as /f/<path>?embed=1. Read-only, no page chrome. */
+const LOCAL=MODE==="local",EMBED=LOCAL&&new URLSearchParams(location.search).has("embed"),SAVES=(MODE==="edit"||LOCAL)&&!EMBED;
 const DOC_ID=LOCAL?encodeURIComponent(decodeURIComponent(location.pathname.slice(3))):location.pathname.split("/")[2];
 const SAVED_TEXT=LOCAL?"Saved to file":"All changes saved";
-const READONLY=MODE==="share";
+const READONLY=MODE==="share"||EMBED;
 /* Samples live in /js/templates.js */
 const MERMAID_URL="/vendor/mermaid.min.js";
 const SYS='-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
@@ -1597,7 +1598,8 @@ $("t-snap").onclick=()=>{S.snap=!S.snap;$("t-snap").setAttribute("aria-pressed",
 $("t-focus").onclick=()=>{S.focus=!S.focus;$("t-focus").setAttribute("aria-pressed",S.focus);if(S.focus&&W.on)walkStop();
   S.focusId=S.focus?(S.sel?(S.sel.type==="node"?S.sel.id:(M.edges[S.sel.i]||{}).a||null):null):null;
   if(S.focus)toast(S.focusId?`Focused on ${nodeLabel(byId(S.focusId))}. Double-click another box to switch, or press Focus to stop.`:"Click a box to focus on it. Double-click another box to switch.");draw()};
-$("t-walk").onclick=()=>{if(M.kind==="seq"){if(W.on)walkStop();else seqWalkStart();return}if(M.kind!=="flow")return;if(W.on)walkStop();else{const s=startNodes();walkStart(s[0].id)}};
+$("t-walk").onclick=()=>{if(M.kind==="seq"){if(W.on)walkStop();else seqWalkStart()}else if(M.kind==="flow"){if(W.on)walkStop();else{const s=startNodes();walkStart(s[0].id)}}
+  if(EMBED&&W.on&&document.body.classList.contains("nopanel"))$("t-panel").click()}; // the walkthrough's choices are in the side panel
 $("t-fit").onclick=()=>fit(true);
 $("t-zin").onclick=()=>{const r=svg.getBoundingClientRect();zoomAt(V.k*1.2,r.width/2,r.height/2)};
 $("t-zout").onclick=()=>{const r=svg.getBoundingClientRect();zoomAt(V.k/1.2,r.width/2,r.height/2)};
@@ -2007,9 +2009,10 @@ async function boot(){
   if(READONLY){$("c-apply").hidden=true;$("code").readOnly=true}
   $("logo").href=MODE==="edit"?"/app":"/";
   if(LOCAL)document.querySelector("#b-signup").hidden=true;
+  if(EMBED){document.body.classList.add("embed","nopanel");$("t-panel").setAttribute("aria-pressed","false")} // the viewer has the Edit button
   let src="",title="";
   try{
-    if(SAVES){const r=await api(`/api/diagrams/${DOC_ID}`);DOC=r.diagram;src=DOC.source;title=DOC.title;lastSaved=src;setStatus(SAVED_TEXT,"ok")}
+    if(SAVES||EMBED){const r=await api(`/api/diagrams/${DOC_ID}`);DOC=r.diagram;src=DOC.source;title=DOC.title;lastSaved=src;if(SAVES)setStatus(SAVED_TEXT,"ok")}
     else if(MODE==="share"){const r=await api(`/api/share/${location.pathname.split("/")[2]}`);src=r.diagram.source;title=r.diagram.title;$("owner").textContent=`Shared by ${r.diagram.owner}`}
     else{const T=window.UNTANGLE_TEMPLATES||[];const want=new URLSearchParams(location.search).get("t");const tpl=T.find(x=>x.id===want)||T[0];
       const saved=want?null:store("untangle-demo");src=saved&&detectKind(saved)?saved:tpl.source;title="Try Untangle";
@@ -2022,7 +2025,7 @@ async function boot(){
   let first=build(src,false);if(!first.model)first={model:{kind:"view",type:firstWord(src)||"unknown",src:src.trim(),dir:"TD",nodes:[],edges:[]}};
   M=first.model;$("t-undo").disabled=true;kindUI();draw();syncCode();inspector();fit();refreshFind();
   if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>{if(!viewing())draw();fit()});
-  if(LOCAL&&M.kind!=="view"){const loss=lossOf(src),parts=[];
+  if(LOCAL&&!EMBED&&M.kind!=="view"){const loss=lossOf(src),parts=[];
     if(loss.comments)parts.push(`${loss.comments} comment line${loss.comments>1?"s":""} inside the diagram`);
     if(loss.styles)parts.push(`${loss.styles} styling line${loss.styles>1?"s":""}`);
     if(parts.length){const el=$("info-alert");el.innerHTML=`<b>Before you edit:</b> saving rewrites this file in Untangle's own order and drops ${esc(parts.join(" and "))}. Comments above the diagram are kept. Nothing is written until you change something. <span class="alert-btns"><button class="btn" id="info-ok">Got it</button></span>`;el.hidden=false;$("info-ok").onclick=()=>{el.hidden=true}}}

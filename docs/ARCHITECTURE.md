@@ -37,7 +37,7 @@ server/
   db.js       SQLite schema and numbered migrations
   mail.js     SMTP email (password reset)
   local.js    Local mode: the diagrams API backed by files (createLocalApp)
-  markdown.js Finding and replacing ```mermaid blocks in Markdown files
+  markdown.js Finding and replacing ```mermaid blocks in Markdown files, and the viewer's markers
 bin/
   untangle.js The `untangled` command: argument parsing, then starts local.js
 public/
@@ -46,6 +46,7 @@ public/
   app.html    Dashboard                     js/dashboard.js
   account.html                              js/account.js
   local.html  File list in local mode       js/local.js
+  md.html     Markdown viewer (local mode)  js/md.js
   editor.html The editor, in four modes     js/editor.js  (the bulk of the project)
   privacy.html, terms.html, 404.html, 500.html, robots.txt
   js/api.js       fetch wrapper shared by the page scripts
@@ -173,6 +174,15 @@ A Markdown diagram's id is the file path plus the block's number: `docs/README.m
   - If no block matches, the diagram itself was changed: **409**, the same conflict prompt as for files. "Keep my version" (a save without `baseUpdatedAt`) then writes to the block at that number.
   - Text that would close the block early (a line starting with ```` ``` ```` or `~~~`) is refused.
 - **Not supported:** fences inside block quotes, unclosed fences, and creating a new diagram in a Markdown file.
+
+### The Markdown viewer (`/m/<path>`)
+
+`public/md.html` and `public/js/md.js`. `GET /api/markdown/<path>` returns the file's text with each diagram block replaced by a marker line `UNTANGLE-DIAGRAM-<n>` (`withPlaceholders`), plus the list of blocks. The page renders that text with **marked**, cleans the HTML with **DOMPurify** (both are already installed as dependencies of Mermaid and served from `/vendor/`), and puts a live diagram where each marker lands.
+
+- A live diagram is the editor in **embed mode**: `/f/<path>%23<n>?embed=1` in a frame. `EMBED` in `editor.js` makes it read-only, hides the page chrome, and opens the side panel only when a walkthrough starts.
+- Because of that frame, local mode sends `frame-ancestors 'self'` (other sites still can't frame it). The viewer page alone allows `https:` images, for README badges.
+- Relative links to Markdown files are rewritten to `/m/...`, and relative images to `/raw/...`. `/raw/` serves only image files inside the folder, with a `sandbox` policy so an SVG opened directly can't run scripts.
+- The page re-fetches when the window regains focus, so it shows edits made in the editor or by `git pull`.
 
 `test/markdown.test.js` covers the block rules; `test/local.test.js` covers the API.
 

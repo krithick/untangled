@@ -11,12 +11,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { detectKind } from "./app.js";
-import { findMermaidBlocks, replaceBlock, blockHash } from "./markdown.js";
+import { findMermaidBlocks, replaceBlock, blockHash, withPlaceholders } from "./markdown.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(here, "..", "public");
 const require = createRequire(import.meta.url);
 const MERMAID_FILE = require.resolve("mermaid/dist/mermaid.min.js");
+/* The Markdown viewer's renderer and sanitizer (both already installed as dependencies of Mermaid). */
+const MARKED_FILE = path.join(path.dirname(require.resolve("marked")), "marked.esm.js");
+const PURIFY_FILE = path.join(path.dirname(require.resolve("dompurify")), "purify.es.mjs");
+const IMAGE = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 
 const EXT = /\.(mmd|mermaid)$/i, MD = /\.(md|markdown)$/i;
 const BLOCK_ID = /^(.+\.(?:md|markdown))#([1-9]\d{0,4})$/i;
@@ -78,18 +82,18 @@ export function createLocalApp({ root }) {
   app.use((req, res, next) => (LOCAL_HOST.test(req.headers.host || "") ? next() : res.status(403).send("Untangle local mode only answers on localhost.")));
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN"); // the Markdown viewer frames the editor; other sites can't
     res.setHeader("Referrer-Policy", "same-origin");
     res.setHeader("Content-Security-Policy",
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; " +
-      "connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+      "connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'");
     next();
   });
 
   /** Turns a path from the browser into a safe absolute path inside root, or refuses. */
-  function resolveFile(rel, { mustExist = true } = {}) {
+  function resolveFile(rel, { mustExist = true, images = false } = {}) {
     rel = String(rel || "").replace(/\\/g, "/");
-    if (!rel || rel.includes("\0") || !(EXT.test(rel) || MD.test(rel))) fail(400, "Only .mmd, .mermaid and Markdown files can be opened.");
+    if (!rel || rel.includes("\0") || !(EXT.test(rel) || MD.test(rel) || (images && IMAGE.test(rel)))) fail(400, "Only .mmd, .mermaid and Markdown files can be opened.");
     if (rel.split("/").some((s) => s === ".." || s === "." || s === "" || s.startsWith("."))) fail(400, "That file path isn't allowed.");
     const full = path.resolve(root, rel);
     if (!full.startsWith(root + path.sep)) fail(400, "That file is outside this folder.");
@@ -211,12 +215,38 @@ export function createLocalApp({ root }) {
     writeRaw(r.full, text);
     res.json({ diagram: readDiagram(relNow) });
   }
+  /* The Markdown viewer: the file's text with each diagram replaced by a marker line (see withPlaceholders). */
+  api.get("/markdown/:id", wrap((req, res) => {
+    const file = String(req.params.id || "");
+    if (!MD.test(file)) fail(400, "Only Markdown files can be viewed here.");
+    const full = resolveFile(file);
+    const { st, text } = readText(full);
+    const blocks = findMermaidBlocks(text);
+    res.json({ path: file, text: withPlaceholders(text, blocks), updatedAt: Math.round(st.mtimeMs),
+      blocks: blocks.map((b) => ({ index: b.index, path: `${file}#${b.index}`, title: blockTitle(file, b, blocks.length), kind: detectKind(b.source) })) });
+  }));
   api.use((req, res) => res.status(404).json({ error: "Not found." }));
   app.use("/api", api);
 
   const page = (file) => (req, res) => res.sendFile(path.join(PUBLIC, file));
   app.get("/", page("local.html"));
   app.get(/^\/f\/.+/, page("editor.html"));
+  // The viewer may show images from anywhere (README badges are usually on other sites); everything else stays 'self'.
+  app.get(/^\/m\/.+/, (req, res) => {
+    res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https:; " +
+      "connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+    res.sendFile(path.join(PUBLIC, "md.html"));
+  });
+  /* Images in the folder, for Markdown documents. Sandboxed, so an SVG opened directly can't run scripts. */
+  app.get(/^\/raw\/(.+)$/, wrap((req, res) => {
+    const full = resolveFile(decodeURIComponent(req.params[0]), { images: true });
+    if (!IMAGE.test(full)) fail(400, "Only images can be served.");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox");
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(full);
+  }));
+  app.get("/vendor/marked.esm.js", (req, res) => res.sendFile(MARKED_FILE, { maxAge: "7d" }));
+  app.get("/vendor/purify.es.mjs", (req, res) => res.sendFile(PURIFY_FILE, { maxAge: "7d" }));
   app.get("/vendor/mermaid.min.js", (req, res) => res.sendFile(MERMAID_FILE, { maxAge: "7d" }));
   app.use(express.static(PUBLIC, { index: false, setHeaders: (res, file) => { if (/\.(js|css|html)$/.test(file)) res.setHeader("Cache-Control", "no-cache"); } }));
   app.use((req, res) => res.status(404).sendFile(path.join(PUBLIC, "404.html")));

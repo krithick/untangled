@@ -27,13 +27,14 @@ npx github:krithick/untangled docs/erd.mmd    # one file (created if it doesn't 
 ```
 
 ```bash
-npx github:krithick/untangled README.md       # the diagrams in a Markdown file
+npx github:krithick/untangled README.md       # read a Markdown file with its diagrams live
 ```
 
 It opens in your browser at `http://localhost:4747`. Options: `--port 5000`, `--no-open`.
 
 - Opening a file never changes it. The first edit saves it in Untangle's format: your layout goes into `%% layout:` comments at the end, comments above the diagram keyword are kept, and comments or styling lines inside the diagram are dropped (the editor warns you first).
-- **Markdown files:** each ```` ```mermaid ```` block is listed as its own diagram, named after the heading above it. Saving rewrites only the lines inside that block; the rest of the file is left exactly as it was. The layout comments go inside the block, so GitHub and Bitbucket still draw it.
+- **Markdown viewer:** open any Markdown file to read the whole document, with each diagram shown live in place (your layout, pan and zoom, Focus, Walkthrough) and an Edit button. Links to other Markdown files open in the viewer, and images in the repository show up.
+- **Markdown files:** each ```` ```mermaid ```` block is also listed as its own diagram, named after the heading above it. Saving rewrites only the lines inside that block; the rest of the file is left exactly as it was. The layout comments go inside the block, so GitHub and Bitbucket still draw it.
 - If the file changes on disk while it's open (a `git pull`, another editor), Untangle asks before overwriting. In a Markdown file, changes outside the diagram's block aren't a conflict, and a block that moved because lines were added above it is found again.
 - It only answers on `localhost`, and only reads and writes `.mmd`, `.mermaid` and Markdown files inside the folder you started it in.
 - Needs Node.js 20 or newer.

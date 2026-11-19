@@ -251,6 +251,24 @@ const ISLANDS = "erDiagram\n" + ["A", "B", "C", "D", "E", "F"].map((p) => `  ${p
     assert.match(text, /%% layout: u /, "the layout is saved inside the block");
     assert.equal(rest.length > 0, true);
   });
+  step("local mode: the Markdown viewer shows the document with live diagrams, and scripts in it don't run", async () => {
+    const md = path.join(repo, "docs/viewer.md");
+    fs.writeFileSync(md, "# Viewer test\n\nSee [the guide](guide.md).\n\n<script>window.HACKED = 1</script><img src=x onerror=\"window.HACKED = 2\">\n\n## Flow\n\n```mermaid\nflowchart TD\n    a[One] --> b[Two]\n```\n\n| A | B |\n| - | - |\n| 1 | 2 |\n");
+    await page.goto(L + "/"); await page.waitForSelector(".doc-row");
+    await Promise.all([page.waitForURL("**/m/docs/viewer.md"), page.click('.doc-row a[href="/m/docs/viewer.md"]')]);
+    await page.waitForSelector(".md-diagram iframe");
+    assert.equal(await page.textContent("#doc h1"), "Viewer test");
+    assert.equal(await page.locator("#doc table").count(), 1);
+    assert.equal(await page.getAttribute('#doc a[href^="/m/"]', "href"), "/m/docs/guide.md", "links to other Markdown files open in the viewer");
+    const frame = page.frameLocator(".md-diagram iframe");
+    await frame.locator("#world .node").first().waitFor();
+    assert.equal(await frame.locator("#world .node").count(), 2);
+    assert.equal(await frame.locator("#t-add").isHidden(), true, "the embedded diagram is read-only");
+    assert.equal(await page.evaluate(() => window.HACKED), undefined, "script in the Markdown was not run");
+    await Promise.all([page.waitForURL("**/f/docs/viewer.md%231"), page.click(".md-dbar a")]);
+    await page.waitForSelector(".node");
+    assert.equal(await page.isVisible("#t-add"), true, "Edit opens the full editor");
+  });
   step("Tidy options rearrange at once, can be undone, and are remembered", async () => {
     await page.click("#t-tidy-opt"); await page.waitForSelector("#tidy-menu:not([hidden])");
     await page.click('#tidy-menu [data-opt="style"] [data-v="grid"]'); await page.waitForTimeout(300);

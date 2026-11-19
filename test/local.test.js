@@ -159,3 +159,28 @@ test("Markdown: the same folder rules apply, and new diagrams are .mmd files", a
   assert.equal((await call("POST", "/api/diagrams", { title: "docs/new.md", source: FLOW })).status, 400);
   assert.equal((await call("GET", "/f/guide.md%231")).status, 200);
 });
+
+test("Markdown viewer: the document comes with diagram markers, and its page, images and libraries load", async () => {
+  fs.writeFileSync(path.join(root, "guide.md"), GUIDE + "\n![logo](img/logo.png)\n");
+  fs.mkdirSync(path.join(root, "img"), { recursive: true });
+  fs.writeFileSync(path.join(root, "img/logo.png"), Buffer.from("89504e470d0a1a0a", "hex"));
+  const r = await call("GET", `/api/markdown/${id("guide.md")}`);
+  assert.equal(r.status, 200);
+  assert.match(r.body.text, /## Checkout\n\n\nUNTANGLE-DIAGRAM-1\n/);
+  assert.deepEqual(r.body.blocks.map((b) => [b.path, b.title, b.kind]), [["guide.md#1", "guide.md · Checkout", "flow"], ["guide.md#2", "guide.md · Data", "er"]]);
+  assert.equal((await call("GET", `/api/markdown/${id("docs/flow.mmd")}`)).status, 400, "only Markdown files");
+  assert.equal((await call("GET", `/api/markdown/${id("../outside/notes.md")}`)).status, 400);
+
+  const page = await fetch(base + "/m/guide.md");
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get("content-security-policy"), /img-src 'self' data: blob: https:/, "README badges from other sites can show");
+  const editor = await fetch(base + "/f/guide.md%231?embed=1");
+  assert.match(editor.headers.get("content-security-policy"), /frame-ancestors 'self'/, "the viewer may frame the editor, other sites may not");
+  assert.equal(editor.headers.get("x-frame-options"), "SAMEORIGIN");
+
+  const img = await fetch(base + "/raw/img/logo.png");
+  assert.equal(img.status, 200);
+  assert.match(img.headers.get("content-security-policy"), /sandbox/, "images are sandboxed, so an SVG can't run scripts");
+  for (const bad of ["/raw/docs/flow.mmd", "/raw/../outside/secret.mmd", "/raw/link/x.png"]) assert.notEqual((await fetch(base + bad)).status, 200, bad);
+  for (const v of ["/vendor/marked.esm.js", "/vendor/purify.es.mjs", "/js/md.js"]) assert.equal((await fetch(base + v)).status, 200, v);
+});

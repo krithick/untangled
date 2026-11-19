@@ -1,7 +1,7 @@
 /* Tests of finding and replacing ```mermaid blocks in Markdown (server/markdown.js). Run with: npm test */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { findMermaidBlocks, replaceBlock, blockHash } from "../server/markdown.js";
+import { findMermaidBlocks, replaceBlock, blockHash, withPlaceholders } from "../server/markdown.js";
 
 const DOC = `# Project
 
@@ -86,4 +86,13 @@ test("refuses text that would close the block early", () => {
 test("the fingerprint ignores trailing space and line endings", () => {
   assert.equal(blockHash("flowchart TD\r\n  a\n\n"), blockHash("flowchart TD\n  a"));
   assert.notEqual(blockHash("flowchart TD\n  a"), blockHash("flowchart TD\n  b"));
+});
+
+test("the viewer's text has a marker where each diagram was, numbered like the diagram ids", () => {
+  const out = withPlaceholders(DOC);
+  assert.equal((out.match(/UNTANGLE-DIAGRAM-\d+/g) || []).join(), "UNTANGLE-DIAGRAM-1,UNTANGLE-DIAGRAM-2");
+  assert.doesNotMatch(out, /flowchart TD\n    a --> b/, "the first diagram's fences and text are gone");
+  assert.match(out, /\n  UNTANGLE-DIAGRAM-2\n/, "the list indent is kept, so the marker stays inside the list item");
+  assert.match(out, /```js\nconst s = "```mermaid";\n```/, "other code blocks are untouched");
+  assert.ok(out.endsWith("Last line, no final newline"));
 });
